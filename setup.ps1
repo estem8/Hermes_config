@@ -1,156 +1,205 @@
 <#
 .SYNOPSIS
-    Hermes Agent Stack — automated setup for Windows 11
+    Hermes Agent Stack v2 — automated setup for Windows 11
     Docker Desktop + Hermes Gateway + SearXNG + Mnemosyne + Hermes Desktop
 
 .DESCRIPTION
-    One-command setup that installs and configures the complete AI agent stack:
-      - Docker Desktop (if not present)
-      - SearXNG (private metasearch engine, port 8080)
-      - Mnemosyne (persistent memory backend, port 8081)
-      - Hermes Gateway (dashboard + API, ports 8642/9119)
-      - Hermes Desktop (native app, connected to gateway)
-    All services run in Docker. Data persists in %USERPROFILE%\.hermes.
-
-.PARAMETER DeepSeekApiKey
-    Your DeepSeek API key (sk-...). Prompts interactively if not provided.
-
-.PARAMETER InstallDir
-    Root directory for project files. Default: %USERPROFILE%\hermes-stack
-
-.PARAMETER Model
-    Model to use. Default: deepseek-chat
+    One-command setup. Features:
+      - Dry-run mode (-DryRun)
+      - Checkpoint/resume (survives crashes)
+      - Multi-provider: DeepSeek, OpenRouter, Anthropic, OpenAI, Google
+      - Unified docker-compose with shared network
+      - Health verification at every step
 
 .PARAMETER Provider
-    LLM provider. Default: deepseek
+    LLM provider: deepseek (default), openrouter, anthropic, openai, google
+
+.PARAMETER Model
+    Model name. Default depends on provider.
+
+.PARAMETER ApiKey
+    API key for the selected provider. Prompts if not given.
+
+.PARAMETER DryRun
+    Show what would be installed without making changes.
+
+.PARAMETER InstallDir
+    Root directory. Default: %USERPROFILE%\hermes-stack
 
 .EXAMPLE
-    .\setup.ps1 -DeepSeekApiKey "sk-abc123..."
-
-.EXAMPLE
-    .\setup.ps1 -Model "deepseek-v4-pro" -Provider "deepseek"
-
-.NOTES
-    Requires: Windows 11, PowerShell 5.1+, internet connection, ~20GB free disk
-    Author: Automated setup script
+    .\setup.ps1 -Provider deepseek -ApiKey "sk-abc..."
+    .\setup.ps1 -Provider openrouter -Model "anthropic/claude-sonnet-4.6" -ApiKey "sk-or-..."
+    .\setup.ps1 -DryRun
 #>
 
 param(
-    [string]$DeepSeekApiKey,
-    [string]$InstallDir = "$env:USERPROFILE\hermes-stack",
-    [string]$Model = "deepseek-chat",
-    [string]$Provider = "deepseek"
+    [ValidateSet("deepseek","openrouter","anthropic","openai","google")]
+    [string]$Provider = "deepseek",
+
+    [string]$Model,
+
+    [string]$ApiKey,
+
+    [switch]$DryRun,
+
+    [string]$InstallDir = "$env:USERPROFILE\hermes-stack"
 )
 
-$ErrorActionPreference = "Stop"
+$ErrorActionPreference = "Continue"
 $ProgressPreference = "SilentlyContinue"
 
-# ═══════════════════════════════════════════════════════════════════
-#  COLORS & OUTPUT HELPERS
-# ═══════════════════════════════════════════════════════════════════
-function Write-Step { Write-Host "`n▶ $args" -ForegroundColor Cyan }
-function Write-OK   { Write-Host "  ✓ $args" -ForegroundColor Green }
-function Write-Warn { Write-Host "  ⚠ $args" -ForegroundColor Yellow }
-function Write-Err  { Write-Host "  ✗ $args" -ForegroundColor Red; exit 1 }
-function Write-Info { Write-Host "    $args" -ForegroundColor Gray }
+# ═══════════════════════════════════════════
+# CONFIG: provider defaults
+# ═══════════════════════════════════════════
+$ProviderConfig = @{
+    deepseek   = @{ defaultModel="deepseek-chat";            envKey="DEEPSEEK_API_KEY";    baseUrl="" }
+    openrouter = @{ defaultModel="anthropic/claude-sonnet-4.6"; envKey="OPENROUTER_API_KEY"; baseUrl="https://openrouter.ai/api/v1" }
+    anthropic  = @{ defaultModel="claude-sonnet-4.6";         envKey="ANTHROPIC_API_KEY";   baseUrl="" }
+    openai     = @{ defaultModel="gpt-4o";                    envKey="OPENAI_API_KEY";      baseUrl="" }
+    google     = @{ defaultModel="gemini-2.5-pro";            envKey="GOOGLE_API_KEY";      baseUrl="" }
+}
+$cfg = $ProviderConfig[$Provider]
+if (-not $Model) { $Model = $cfg.defaultModel }
 
-# ═══════════════════════════════════════════════════════════════════
-#  1. PREREQUISITES
-# ═══════════════════════════════════════════════════════════════════
-Write-Step "STEP 1: Checking prerequisites"
+# ═══════════════════════════════════════════
+# HELPERS
+# ═══════════════════════════════════════════
+function Write-Step ($msg) { Write-Host "`n>> $msg" -ForegroundColor Cyan }
+function Write-OK   ($msg) { Write-Host "   OK  $msg" -ForegroundColor Green }
+function Write-WARN ($msg) { Write-Host "   WARN $msg" -ForegroundColor Yellow }
+function Write-ERR  ($msg) { Write-Host "   ERR $msg" -ForegroundColor Red }
+function Write-INFO ($msg) { Write-Host "   $msg" -ForegroundColor Gray }
 
-# Admin check
-$isAdmin = ([Security.Principal.WindowsPrincipal] [Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
-if (-not $isAdmin) {
-    Write-Warn "Not running as Administrator. Docker Desktop install may require admin rights."
-    Write-Info "Re-run: powershell -ExecutionPolicy Bypass -File setup.ps1"
+# Retry a scriptblock up to $max times with $delay seconds between
+function Invoke-Retry([ScriptBlock]$Script, [int]$Max=3, [int]$Delay=5, [string]$Desc="") {
+    for ($i=1; $i -le $Max; $i++) {
+        try {
+            if ($DryRun) { Write-INFO "[dry-run] would: $Desc"; return $true }
+            & $Script
+            return $true
+        } catch {
+            Write-WARN "$Desc — attempt $i/$Max failed: $_"
+            if ($i -lt $Max) { Start-Sleep $Delay }
+        }
+    }
+    throw "$Desc — all $Max attempts failed"
 }
 
-# Docker check
-$dockerVersion = (Get-Command docker -ErrorAction SilentlyContinue).Source
-if (-not $dockerVersion) {
-    Write-Warn "Docker not found. Installing Docker Desktop..."
-    Write-Info "Downloading Docker Desktop installer..."
-    $dockerInstaller = "$env:TEMP\DockerDesktopInstaller.exe"
-    Invoke-WebRequest -Uri "https://desktop.docker.com/win/main/amd64/Docker%20Desktop%20Installer.exe" -OutFile $dockerInstaller
-    Write-Info "Running installer (this requires admin and may prompt UAC)..."
-    Start-Process -FilePath $dockerInstaller -ArgumentList "install --quiet --accept-license" -Wait -Verb RunAs
-    Write-Info "Docker Desktop installed. You may need to log out and back in, or start it manually."
-    Write-Info "After Docker is running, re-run this script."
+# Checkpoint state management
+$StateFile = "$InstallDir\.hermes-stack-state.json"
+function Get-State {
+    if (Test-Path $StateFile) {
+        try { return Get-Content $StateFile -Raw | ConvertFrom-Json -ErrorAction Stop }
+        catch { }
+    }
+    return @{ completed=@(); provider=$Provider; model=$Model; installedAt=$null }
+}
+function Set-State($step) {
+    if ($DryRun) { return }
+    $s = Get-State
+    if ($step -notin $s.completed) { $s.completed += $step }
+    $s | ConvertTo-Json -Depth 3 | Out-File -Encoding utf8NoBOM -FilePath $StateFile
+}
+function Is-Completed($step) {
+    $s = Get-State
+    return $step -in $s.completed
+}
+
+# ═══════════════════════════════════════════
+# DRY-RUN
+# ═══════════════════════════════════════════
+if ($DryRun) {
+    Write-Host "=== DRY RUN — no changes will be made ===" -ForegroundColor Magenta
+    Write-Host ""
+    Write-Host "Provider:   $Provider"
+    Write-Host "Model:      $Model"
+    Write-Host "InstallDir: $InstallDir"
+    Write-Host "API key:    $($ApiKey.Substring(0,[Math]::Min(8,$ApiKey.Length)))..."
+    Write-Host ""
+    Write-Host "Will install/verify:"
+    Write-Host "  1. Docker Desktop"
+    Write-Host "  2. Docker containers (hermes, searxng-core, searxng-valkey, mnemosyne)"
+    Write-Host "  3. Hermes configuration (~/.hermes/config.yaml)"
+    Write-Host "  4. Mnemosyne plugin in Hermes"
+    Write-Host "  5. Hermes Desktop + connection.json"
+    Write-Host ""
+    Write-Host "Ports: 8642 (API), 9119 (dashboard), 8080 (search), 8081 (memory)"
     exit 0
 }
-Write-OK "Docker found: $dockerVersion"
 
-# Docker running?
-$dockerRunning = docker info 2>&1
-if ($LASTEXITCODE -ne 0) {
-    Write-Warn "Docker daemon is not running. Starting Docker Desktop..."
-    Start-Process "C:\Program Files\Docker\Docker\Docker Desktop.exe"
-    Write-Info "Waiting for Docker to start (up to 60s)..."
-    for ($i = 1; $i -le 12; $i++) {
-        Start-Sleep 5
-        docker info 2>&1 | Out-Null
-        if ($LASTEXITCODE -eq 0) { break }
+# ═══════════════════════════════════════════
+# STEP 1: PREREQUISITES
+# ═══════════════════════════════════════════
+$step = "prerequisites"
+if (Is-Completed $step) { Write-OK "Step '$step' already done — skipping" }
+else {
+    Write-Step "STEP 1: Prerequisites"
+
+    # Admin check
+    $isAdmin = ([Security.Principal.WindowsPrincipal] [Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole(2)
+    if (-not $isAdmin) { Write-WARN "Not admin. Docker install may need UAC approval." }
+
+    # Docker
+    if (-not (Get-Command docker -ErrorAction SilentlyContinue)) {
+        Write-WARN "Docker not found. Installing Docker Desktop..."
+        $di = "$env:TEMP\DockerDesktopInstaller.exe"
+        Invoke-Retry -Script { Invoke-WebRequest -Uri "https://desktop.docker.com/win/main/amd64/Docker%20Desktop%20Installer.exe" -OutFile $di } -Max 2 -Desc "Download Docker"
+        Start-Process -FilePath $di -ArgumentList "install --quiet --accept-license" -Wait -Verb RunAs
+        Write-INFO "Docker installed. Log out/in or start Docker Desktop, then re-run."
+        exit 0
     }
-    docker info 2>&1 | Out-Null
-    if ($LASTEXITCODE -ne 0) { Write-Err "Docker failed to start. Please start Docker Desktop manually and re-run." }
+    Write-OK "Docker found"
+
+    # Docker daemon
+    Invoke-Retry -Script {
+        $r = docker info 2>&1; if ($LASTEXITCODE -ne 0) { throw "Docker not running" }
+    } -Max 6 -Delay 10 -Desc "Wait for Docker daemon"
+    Write-OK "Docker daemon running"
+
+    # API key
+    if (-not $ApiKey) { $ApiKey = Read-Host "Enter $Provider API key" }
+    if ($ApiKey.Length -lt 10) { Write-WARN "API key looks too short — verify it" }
+
+    Set-State $step
 }
-Write-OK "Docker daemon is running"
 
-# API Key
-if (-not $DeepSeekApiKey) {
-    $DeepSeekApiKey = Read-Host "Enter your DeepSeek API key (sk-...)"
-}
-if (-not $DeepSeekApiKey.StartsWith("sk-")) {
-    Write-Warn "API key doesn't start with 'sk-'. Make sure it's correct."
-}
+# ═══════════════════════════════════════════
+# STEP 2: DIRECTORIES & SECRETS
+# ═══════════════════════════════════════════
+$step = "directories"
+if (Is-Completed $step) { Write-OK "Step '$step' already done — skipping" }
+else {
+    Write-Step "STEP 2: Directories & secrets"
 
-# ═══════════════════════════════════════════════════════════════════
-#  2. CREATE DIRECTORIES & SECRETS
-# ═══════════════════════════════════════════════════════════════════
-Write-Step "STEP 2: Creating directories and generating secrets"
+    $dotHermes = "$env:USERPROFILE\.hermes"
+    foreach ($d in @($InstallDir, $dotHermes)) {
+        New-Item -ItemType Directory -Force -Path $d | Out-Null
+    }
+    Write-OK "Directories created"
 
-$dotHermesDir = "$env:USERPROFILE\.hermes"
-$searxngDir  = "$InstallDir\searxng"
-$mnemosyneDir = "$InstallDir\mnemosyne"
+    # Generate secrets
+    $dashPass  = -join ((48..57)+(65..90)+(97..122) | Get-Random -Count 16 | %{[char]$_})
+    $dashSec   = -join ((48..57)+(65..90)+(97..122) | Get-Random -Count 44 | %{[char]$_}) + "=="
+    $mcpTok    = -join ((48..57)+(65..70) | Get-Random -Count 64 | %{[char]$_})
+    $searxngSec = -join ((48..57)+(65..90)+(97..122) | Get-Random -Count 32 | %{[char]$_})
 
-foreach ($d in @($dotHermesDir, $searxngDir, "$searxngDir\core-config", $mnemosyneDir)) {
-    New-Item -ItemType Directory -Force -Path $d | Out-Null
-}
-Write-OK "Directories created"
-
-# Generate secrets
-$dashboardPassword = -join ((48..57) + (65..90) + (97..122) | Get-Random -Count 16 | ForEach-Object { [char]$_ })
-$dashboardSecret   = -join ((48..57) + (65..90) + (97..122) | Get-Random -Count 44 | ForEach-Object { [char]$_ }) + "=="
-$mcpToken          = -join ((48..57) + (65..70) | Get-Random -Count 64 | ForEach-Object { [char]$_ })
-$searxngSecret     = -join ((48..57) + (65..90) + (97..122) | Get-Random -Count 32 | ForEach-Object { [char]$_ })
-$apiServerKey      = -join ((48..57) + (65..70) | Get-Random -Count 32 | ForEach-Object { [char]$_ })
-
-Write-OK "Secrets generated"
-Write-Info "Dashboard password: $dashboardPassword (save this!)"
-
-# ═══════════════════════════════════════════════════════════════════
-#  3. WRITE CONFIG FILES
-# ═══════════════════════════════════════════════════════════════════
-Write-Step "STEP 3: Writing configuration files"
-
-# --- Hermes .env ---
-@"
-DEEPSEEK_API_KEY=$DeepSeekApiKey
+    # Write Hermes .env
+    @"
+$($cfg.envKey)=$ApiKey
 SEARXNG_URL=http://searxng-core:8080
 HERMES_DASHBOARD_BASIC_AUTH_USERNAME=admin
-HERMES_DASHBOARD_BASIC_AUTH_PASSWORD=$dashboardPassword
-HERMES_DASHBOARD_BASIC_AUTH_SECRET=$dashboardSecret
-API_SERVER_KEY=$apiServerKey
-"@ | Out-File -Encoding utf8NoBOM -FilePath "$dotHermesDir\.env"
-Write-OK "Hermes .env written"
+HERMES_DASHBOARD_BASIC_AUTH_PASSWORD=$dashPass
+HERMES_DASHBOARD_BASIC_AUTH_SECRET=$dashSec
+"@ | Out-File -Encoding utf8NoBOM "$dotHermes\.env"
+    Write-OK "Hermes .env"
 
-# --- Hermes config.yaml ---
-@"
+    # Write Hermes config.yaml
+    $baseUrlLine = if ($cfg.baseUrl) { "  base_url: `"$($cfg.baseUrl)`"" } else { "  base_url: `"`"" }
+    @"
 model:
   default: $Provider/$Model
   provider: $Provider
-  base_url: ""
+$baseUrlLine
 web:
   search_backend: searxng
 memory:
@@ -163,323 +212,198 @@ approvals:
 display:
   language: ru
   show_cost: true
-"@ | Out-File -Encoding utf8NoBOM -FilePath "$dotHermesDir\config.yaml"
-Write-OK "Hermes config.yaml written"
+"@ | Out-File -Encoding utf8NoBOM "$dotHermes\config.yaml"
+    Write-OK "Hermes config.yaml"
 
-# --- SearXNG settings.yml ---
-@"
-use_default_settings: true
-
-server:
-  secret_key: "$searxngSecret"
-  image_proxy: true
-
-search:
-  formats:
-    - html
-    - json
-    - csv
-    - rss
-"@ | Out-File -Encoding utf8NoBOM -FilePath "$searxngDir\core-config\settings.yml"
-Write-OK "SearXNG settings.yml written"
-
-# --- SearXNG .env ---
-@"
+    # Write stack .env for docker-compose
+    @"
+MNEMOSYNE_MCP_TOKEN=$mcpTok
+HERMES_API_PORT=8642
+HERMES_DASHBOARD_PORT=9119
 SEARXNG_HOST=127.0.0.1
 SEARXNG_PORT=8080
-"@ | Out-File -Encoding utf8NoBOM -FilePath "$searxngDir\.env"
-Write-OK "SearXNG .env written"
+MNEMOSYNE_PORT=127.0.0.1:8081
+"@ | Out-File -Encoding utf8NoBOM "$InstallDir\.env"
+    Write-OK "Stack .env"
 
-# --- SearXNG docker-compose.yml ---
-@"
-name: searxng
+    # SearXNG env
+    @"
+SEARXNG_HOST=127.0.0.1
+SEARXNG_PORT=8080
+"@ | Out-File -Encoding utf8NoBOM "$InstallDir\.env.searxng"
+    Write-OK "SearXNG env"
 
-services:
-  core:
-    container_name: searxng-core
-    image: docker.io/searxng/searxng:latest
-    restart: always
-    ports:
-      - "127.0.0.1:8080:8080"
-    env_file: ./.env
-    volumes:
-      - ./core-config/:/etc/searxng/:Z
-      - core-data:/var/cache/searxng/
+    # Fix searxng-settings.yml with real secret
+    (Get-Content "$InstallDir\searxng-settings.yml" -Raw) -replace '\$SEARXNG_SECRET_PLACEHOLDER', $searxngSec |
+        Out-File -Encoding utf8NoBOM "$InstallDir\searxng-settings.yml"
+    Write-OK "SearXNG settings"
 
-  valkey:
-    container_name: searxng-valkey
-    image: docker.io/valkey/valkey:9-alpine
-    command: valkey-server --save 30 1 --loglevel warning
-    restart: always
-    volumes:
-      - valkey-data:/data/
-
-volumes:
-  core-data:
-  valkey-data:
-"@ | Out-File -Encoding utf8NoBOM -FilePath "$searxngDir\docker-compose.yml"
-Write-OK "SearXNG docker-compose.yml written"
-
-# --- Mnemosyne Dockerfile ---
-@"
-FROM python:3.12-slim
-
-WORKDIR /app
-
-RUN pip install --no-cache-dir "mnemosyne-memory[mcp]"
-RUN apt-get update && apt-get install -y sqlite3 curl && rm -rf /var/lib/apt/lists/*
-RUN mkdir -p /data
-
-EXPOSE 8080
-
-ENV MNEMOSYNE_DATA_DIR=/data
-ENV MNEMOSYNE_MCP_TOKEN=
-
-CMD ["python", "-m", "mnemosyne.mcp_server", "--transport", "sse", "--host", "0.0.0.0", "--port", "8080"]
-"@ | Out-File -Encoding utf8NoBOM -FilePath "$mnemosyneDir\Dockerfile"
-Write-OK "Mnemosyne Dockerfile written"
-
-# --- Mnemosyne .env ---
-"MCP_TOKEN=$mcpToken" | Out-File -Encoding utf8NoBOM -FilePath "$mnemosyneDir\.env"
-Write-OK "Mnemosyne .env written"
-
-# --- Mnemosyne docker-compose.yml ---
-@"
-services:
-  mnemosyne:
-    build: .
-    container_name: mnemosyne
-    ports:
-      - "127.0.0.1:8081:8080"
-    volumes:
-      - mnemosyne-data:/data
-    environment:
-      - MNEMOSYNE_DATA_DIR=/data
-      - MNEMOSYNE_MCP_TOKEN=${MCP_TOKEN}
-    restart: unless-stopped
-    healthcheck:
-      test:
-        [
-          "CMD-SHELL",
-          "curl -s -o /dev/null --max-time 3 http://localhost:8080/sse || [ $$? -eq 28 ] || exit 1",
-        ]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 15s
-
-volumes:
-  mnemosyne-data:
-"@ | Out-File -Encoding utf8NoBOM -FilePath "$mnemosyneDir\docker-compose.yml"
-Write-OK "Mnemosyne docker-compose.yml written"
-
-# ═══════════════════════════════════════════════════════════════════
-#  4. LAUNCH DOCKER CONTAINERS
-# ═══════════════════════════════════════════════════════════════════
-Write-Step "STEP 4: Launching SearXNG and Mnemosyne"
-
-# Launch SearXNG
-Push-Location $searxngDir
-try {
-    Write-Info "Pulling and starting SearXNG..."
-    docker compose up -d 2>&1 | Out-Null
-    if ($LASTEXITCODE -ne 0) { throw "docker compose failed" }
-    Write-OK "SearXNG started"
-} finally { Pop-Location }
-
-# Launch Mnemosyne
-Push-Location $mnemosyneDir
-try {
-    Write-Info "Building and starting Mnemosyne (this may take 2-5 minutes)..."
-    docker compose build 2>&1 | Out-Null
-    docker compose up -d 2>&1 | Out-Null
-    if ($LASTEXITCODE -ne 0) { throw "docker compose failed" }
-    Write-OK "Mnemosyne started"
-} finally { Pop-Location }
-
-# Launch Hermes gateway
-Write-Info "Starting Hermes Gateway container..."
-# Stop existing hermes container if any
-docker rm -f hermes 2>&1 | Out-Null
-
-docker run -d --name hermes `
-  --restart unless-stopped `
-  --memory=4g --cpus=2 `
-  -v "${dotHermesDir}:/opt/data" `
-  -p 8642:8642 -p 9119:9119 `
-  -e HERMES_DASHBOARD=1 `
-  nousresearch/hermes-agent gateway run 2>&1 | Out-Null
-if ($LASTEXITCODE -ne 0) { Write-Err "Hermes container failed to start" }
-Write-OK "Hermes Gateway started"
-
-# ═══════════════════════════════════════════════════════════════════
-#  5. CONNECT NETWORKS
-# ═══════════════════════════════════════════════════════════════════
-Write-Step "STEP 5: Connecting Docker networks"
-
-# Wait for containers to be ready
-Write-Info "Waiting for containers to initialize..."
-Start-Sleep 12
-
-# Connect hermes to searxng network
-docker network connect searxng_default hermes 2>&1 | Out-Null
-if ($LASTEXITCODE -ne 0) {
-    Write-Warn "Could not connect hermes to searxng_default. SearXNG may already be connected."
-} else {
-    Write-OK "Hermes connected to searxng_default"
-}
-
-# Connect mnemosyne to searxng network for hermes access
-docker network connect searxng_default mnemosyne 2>&1 | Out-Null
-if ($LASTEXITCODE -ne 0) {
-    Write-Warn "Could not connect mnemosyne to searxng_default."
-} else {
-    Write-OK "Mnemosyne connected to searxng_default"
-}
-
-# ═══════════════════════════════════════════════════════════════════
-#  6. INSTALL MNEMOSYNE PLUGIN IN HERMES
-# ═══════════════════════════════════════════════════════════════════
-Write-Step "STEP 6: Installing Mnemosyne plugin in Hermes"
-
-Write-Info "Installing mnemosyne-hermes package (this may take 2-3 minutes)..."
-docker exec hermes uv pip install --python /opt/hermes/.venv/bin/python mnemosyne-hermes 2>&1 | Out-Null
-if ($LASTEXITCODE -ne 0) { Write-Err "Mnemosyne package install failed" }
-
-# Copy plugin files
-docker exec hermes bash -c "cp -r /opt/hermes/.venv/lib/python3.13/site-packages/mnemosyne_hermes/* /opt/data/plugins/mnemosyne/" 2>&1 | Out-Null
-
-# Configure memory provider
-docker exec hermes hermes config set memory.provider mnemosyne 2>&1 | Out-Null
-if ($LASTEXITCODE -ne 0) { Write-Warn "Could not set memory.provider" }
-
-Write-OK "Mnemosyne plugin installed"
-
-# Restart hermes to pick up changes
-Write-Info "Restarting Hermes to apply changes..."
-docker restart hermes 2>&1 | Out-Null
-Start-Sleep 10
-
-# Reconnect network after restart
-docker network connect searxng_default hermes 2>&1 | Out-Null
-
-# ═══════════════════════════════════════════════════════════════════
-#  7. VERIFY CONTAINERS
-# ═══════════════════════════════════════════════════════════════════
-Write-Step "STEP 7: Verifying containers"
-
-$containers = docker ps --format "{{.Names}}" | Out-String
-$expected = @("hermes", "searxng-core", "searxng-valkey", "mnemosyne")
-foreach ($c in $expected) {
-    if ($containers -match $c) { Write-OK "$c is running" }
-    else { Write-Warn "$c is NOT running — check docker logs $c" }
-}
-
-# Verify hermes gateway
-try {
-    $status = Invoke-RestMethod -Uri "http://localhost:9119/api/status" `
-        -Headers @{Authorization = "Basic " + [Convert]::ToBase64String([Text.Encoding]::ASCII.GetBytes("admin:$dashboardPassword"))} `
-        -TimeoutSec 10 -ErrorAction Stop
-    Write-OK "Hermes Gateway API: OK (v$($status.version))"
-} catch {
-    Write-Warn "Hermes API check failed: $_"
-}
-
-# ═══════════════════════════════════════════════════════════════════
-#  8. INSTALL HERMES DESKTOP
-# ═══════════════════════════════════════════════════════════════════
-Write-Step "STEP 8: Setting up Hermes Desktop"
-
-$desktopRoamingDir = "$env:APPDATA\hermes"
-$hermesSetupExe  = "$dotHermesDir\hermes-setup.exe"
-$hermesInstalled = Test-Path "$env:LOCALAPPDATA\hermes\hermes-agent\apps\desktop"
-
-if (-not $hermesInstalled) {
-    Write-Info "Downloading Hermes Desktop installer..."
-    
-    if (-not (Test-Path $hermesSetupExe)) {
-        Invoke-WebRequest -Uri "https://hermes-agent.nousresearch.com/api/desktop/download/windows" `
-            -OutFile $hermesSetupExe -ErrorAction Stop
-    }
-    
-    Write-Info "Running Hermes Desktop installer..."
-    Start-Process -FilePath $hermesSetupExe -ArgumentList "--silent" -Wait
-    Write-OK "Hermes Desktop installed"
-} else {
-    Write-OK "Hermes Desktop already installed"
-}
-
-# Configure Desktop connection to remote gateway
-Write-Info "Configuring Desktop connection to gateway..."
-$connectionJson = @{
-    mode = "remote"
-    remote = @{
-        url = "http://localhost:9119"
-        authMode = "basic"
-    }
-    profiles = @{}
-}
-
-New-Item -ItemType Directory -Force -Path $desktopRoamingDir | Out-Null
-$connectionJson | ConvertTo-Json -Depth 3 | Out-File -Encoding utf8NoBOM -FilePath "$desktopRoamingDir\connection.json"
-Write-OK "Desktop connection configured → http://localhost:9119"
-
-# ═══════════════════════════════════════════════════════════════════
-#  9. SUMMARY
-# ═══════════════════════════════════════════════════════════════════
-Write-Step "DONE — Hermes Agent Stack is ready!"
-
-Write-Host @"
-
-╔══════════════════════════════════════════════════════════════╗
-║              Hermes Agent Stack — Status                    ║
-╠══════════════════════════════════════════════════════════════╣
-║                                                            ║
-║  Containers (docker ps):                                    ║
-║    hermes           — Gateway + Dashboard (ports 8642,9119) ║
-║    searxng-core     — Private search engine (port 8080)     ║
-║    searxng-valkey   — Search cache                          ║
-║    mnemosyne        — Memory backend (port 8081)           ║
-║                                                            ║
-║  Access:                                                    ║
-║    Dashboard:  http://localhost:9119                        ║
-║    Credentials: admin / $dashboardPassword              ║
-║                                                            ║
-║  Hermes Desktop:                                            ║
-║    Installed and configured for http://localhost:9119       ║
-║    Sign in with: admin / $dashboardPassword              ║
-║                                                            ║
-║  Files:                                                     ║
-║    Configs: $dotHermesDir                       ║
-║    SearXNG: $searxngDir                           ║
-║    Mnemosyne: $mnemosyneDir                      ║
-║                                                            ║
-╚══════════════════════════════════════════════════════════════╝
-
-  To launch Hermes Desktop:
-    Start-Process "$env:LOCALAPPDATA\hermes\hermes-agent\apps\desktop\Hermes Agent.exe"
-
-  Or just search "Hermes" in the Start Menu.
-
-"@
-
-# Save credentials to a file for reference
-@"
+    # Save credentials
+    @"
 === Hermes Agent Stack — Credentials ===
 Generated: $(Get-Date -Format "yyyy-MM-dd HH:mm")
 
-Dashboard:
-  URL:      http://localhost:9119
+Dashboard: http://localhost:9119
   Username: admin
-  Password: $dashboardPassword
+  Password: $dashPass
 
-API Server Key: $apiServerKey
-Mnemosyne MCP Token: $mcpToken
-SearXNG Secret: $searxngSecret
-DeepSeek API Key: ${DeepSeekApiKey}: sk-...$($DeepSeekApiKey.Substring($DeepSeekApiKey.Length - 4))
+Mnemosyne MCP Token: $mcpTok
+SearXNG Secret: $searxngSec
+$Provider API Key: $($ApiKey.Substring(0,[Math]::Min(6,$ApiKey.Length)))...
 
 Save this file in a secure location!
-"@ | Out-File -Encoding utf8NoBOM -FilePath "$InstallDir\credentials.txt"
+"@ | Out-File -Encoding utf8NoBOM "$InstallDir\credentials.txt"
 
-Write-Host "  Credentials saved to: $InstallDir\credentials.txt" -ForegroundColor Yellow
-Write-Host "  ⚠ KEEP THIS FILE SAFE — it contains your passwords!" -ForegroundColor Yellow
+    Set-State $step
+}
+
+# ═══════════════════════════════════════════
+# STEP 3: COMPOSE UP
+# ═══════════════════════════════════════════
+$step = "containers"
+if (Is-Completed $step) { Write-OK "Step '$step' already done — skipping" }
+else {
+    Write-Step "STEP 3: Launching containers (docker compose up)"
+
+    Push-Location $InstallDir
+    try {
+        # Stop old hermes if running standalone
+        docker rm -f hermes 2>&1 | Out-Null
+
+        Invoke-Retry -Script {
+            docker compose build mnemosyne 2>&1 | Out-Null
+            if ($LASTEXITCODE -ne 0) { throw "build failed" }
+        } -Max 2 -Desc "Build Mnemosyne"
+
+        Invoke-Retry -Script {
+            docker compose up -d 2>&1 | Out-Null
+            if ($LASTEXITCODE -ne 0) { throw "compose up failed" }
+        } -Max 3 -Delay 8 -Desc "docker compose up -d"
+
+        Write-OK "All containers launched"
+    } finally { Pop-Location }
+
+    # Wait and verify
+    Start-Sleep 10
+    $expected = @("hermes","searxng-core","searxng-valkey","mnemosyne")
+    foreach ($c in $expected) {
+        $running = docker ps --filter "name=$c" --format "{{.Names}}" 2>&1
+        if ($running -eq $c) { Write-OK "$c running" }
+        else { Write-WARN "$c not running — check: docker logs $c" }
+    }
+
+    Set-State $step
+}
+
+# ═══════════════════════════════════════════
+# STEP 4: MNEMOSYNE PLUGIN
+# ═══════════════════════════════════════════
+$step = "plugin"
+if (Is-Completed $step) { Write-OK "Step '$step' already done — skipping" }
+else {
+    Write-Step "STEP 4: Installing Mnemosyne plugin"
+
+    Invoke-Retry -Script {
+        docker exec hermes uv pip install --python /opt/hermes/.venv/bin/python mnemosyne-hermes 2>&1 | Out-Null
+        if ($LASTEXITCODE -ne 0) { throw "pip install failed" }
+    } -Max 3 -Delay 8 -Desc "Install mnemosyne-hermes"
+
+    docker exec hermes bash -c "cp -r /opt/hermes/.venv/lib/python3.13/site-packages/mnemosyne_hermes/* /opt/data/plugins/mnemosyne/" 2>&1 | Out-Null
+    docker exec hermes hermes config set memory.provider mnemosyne 2>&1 | Out-Null
+
+    docker restart hermes 2>&1 | Out-Null
+    Start-Sleep 8
+    Write-OK "Plugin installed, Hermes restarted"
+
+    Set-State $step
+}
+
+# ═══════════════════════════════════════════
+# STEP 5: VERIFY
+# ═══════════════════════════════════════════
+$step = "verify"
+if (Is-Completed $step) { Write-OK "Step '$step' already done — skipping" }
+else {
+    Write-Step "STEP 5: Verifying stack health"
+
+    # Hermes API
+    try {
+        $usr = "admin"; $pw = $dashPass
+        $b64 = [Convert]::ToBase64String([Text.Encoding]::ASCII.GetBytes("$usr`:$pw"))
+        $r = Invoke-RestMethod -Uri "http://localhost:9119/api/status" -Headers @{Authorization="Basic $b64"} -TimeoutSec 15
+        Write-OK "Hermes API v$($r.version) — OK"
+    } catch { Write-ERR "Hermes API: $_" }
+
+    # SearXNG
+    try {
+        $r = Invoke-WebRequest -Uri "http://localhost:8080/search?q=test&format=json" -TimeoutSec 10 -UseBasicParsing
+        Write-OK "SearXNG — HTTP $($r.StatusCode)"
+    } catch { Write-WARN "SearXNG: $_" }
+
+    # Mnemosyne
+    try {
+        $r = Invoke-WebRequest -Uri "http://localhost:8081/sse" -TimeoutSec 5 -UseBasicParsing -Headers @{Authorization="Bearer $mcpTok"}
+        Write-OK "Mnemosyne — HTTP $($r.StatusCode)"
+    } catch { Write-WARN "Mnemosyne: $_" }
+
+    # Memory provider
+    $memStatus = docker exec hermes hermes memory status 2>&1
+    if ($memStatus -match "mnemosyne.*active") { Write-OK "Memory provider: mnemosyne active" }
+    else { Write-WARN "Memory provider may not be active" }
+
+    Set-State $step
+}
+
+# ═══════════════════════════════════════════
+# STEP 6: DESKTOP
+# ═══════════════════════════════════════════
+$step = "desktop"
+if (Is-Completed $step) { Write-OK "Step '$step' already done — skipping" }
+else {
+    Write-Step "STEP 6: Hermes Desktop"
+
+    $setupExe = "$InstallDir\hermes-setup.exe"
+    $installed = Test-Path "$env:LOCALAPPDATA\hermes\hermes-agent\apps\desktop"
+
+    if (-not $installed) {
+        Invoke-Retry -Script {
+            Invoke-WebRequest -Uri "https://hermes-agent.nousresearch.com/api/desktop/download/windows" -OutFile $setupExe
+        } -Max 2 -Desc "Download installer"
+        Start-Process -FilePath $setupExe -ArgumentList "--silent" -Wait
+        Write-OK "Desktop installed"
+    } else { Write-OK "Desktop already installed" }
+
+    # Connection config
+    $connDir = "$env:APPDATA\hermes"
+    New-Item -ItemType Directory -Force -Path $connDir | Out-Null
+    @{
+        mode = "remote"
+        remote = @{ url = "http://localhost:9119"; authMode = "basic" }
+        profiles = @{}
+    } | ConvertTo-Json -Depth 3 | Out-File -Encoding utf8NoBOM "$connDir\connection.json"
+    Write-OK "Connection → http://localhost:9119"
+
+    Set-State $step
+}
+
+# ═══════════════════════════════════════════
+# SUMMARY
+# ═══════════════════════════════════════════
+Write-Host @"
+
+╔══════════════════════════════════════════════════════════════╗
+║          Hermes Agent Stack v2 — Ready                       ║
+╠══════════════════════════════════════════════════════════════╣
+║  Provider: $($Provider.PadRight(20)) Model: $Model
+║  Dashboard:  http://localhost:9119
+║  Login:      admin / $dashPass
+║  Configs:    $dotHermes
+║  Credentials: $InstallDir\credentials.txt
+║  State:      $StateFile
+╚══════════════════════════════════════════════════════════════╝
+
+  Launch Desktop: Start-Process "$env:LOCALAPPDATA\hermes\hermes-agent\apps\desktop\Hermes Agent.exe"
+  Manage:         cd $InstallDir && docker compose ps
+  Logs:           cd $InstallDir && docker compose logs -f
+
+"@

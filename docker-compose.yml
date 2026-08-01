@@ -1,0 +1,81 @@
+name: hermes-stack
+
+services:
+  # ── Hermes Gateway + Dashboard ──
+  hermes:
+    image: nousresearch/hermes-agent:latest
+    container_name: hermes
+    restart: unless-stopped
+    mem_limit: 4g
+    cpus: 2
+    ports:
+      - "${HERMES_API_PORT:-8642}:8642"
+      - "${HERMES_DASHBOARD_PORT:-9119}:9119"
+    volumes:
+      - hermes-data:/opt/data
+    environment:
+      - HERMES_DASHBOARD=1
+      - API_SERVER_ENABLED=true
+    networks:
+      - hermes-net
+
+  # ── SearXNG — private metasearch ──
+  searxng-core:
+    image: docker.io/searxng/searxng:latest
+    container_name: searxng-core
+    restart: always
+    ports:
+      - "${SEARXNG_HOST:-127.0.0.1}:${SEARXNG_PORT:-8080}:8080"
+    env_file: ./.env.searxng
+    volumes:
+      - ./searxng-settings.yml:/etc/searxng/settings.yml:ro
+      - searxng-cache:/var/cache/searxng/
+    networks:
+      - hermes-net
+
+  searxng-valkey:
+    image: docker.io/valkey/valkey:9-alpine
+    container_name: searxng-valkey
+    command: valkey-server --save 30 1 --loglevel warning
+    restart: always
+    volumes:
+      - valkey-data:/data/
+    networks:
+      - hermes-net
+
+  # ── Mnemosyne — persistent memory ──
+  mnemosyne:
+    build:
+      context: .
+      dockerfile: Dockerfile.mnemosyne
+    container_name: mnemosyne
+    restart: unless-stopped
+    ports:
+      - "${MNEMOSYNE_PORT:-127.0.0.1:8081}:8080"
+    volumes:
+      - mnemosyne-data:/data
+    environment:
+      - MNEMOSYNE_DATA_DIR=/data
+      - MNEMOSYNE_MCP_TOKEN=${MNEMOSYNE_MCP_TOKEN}
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "curl -s -o /dev/null --max-time 3 http://localhost:8080/sse || [ $$? -eq 28 ] || exit 1",
+        ]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 15s
+    networks:
+      - hermes-net
+
+networks:
+  hermes-net:
+    driver: bridge
+
+volumes:
+  hermes-data:
+  searxng-cache:
+  valkey-data:
+  mnemosyne-data:

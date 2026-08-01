@@ -1,86 +1,88 @@
-# Hermes Agent Stack — Windows 11 Automated Setup
+# Hermes Agent Stack v2 — Windows 11 Automated Setup
 
-One-command setup for the complete AI agent stack on Windows 11:
-**Docker Desktop + Hermes Gateway + SearXNG + Mnemosyne + Hermes Desktop**
+One-command setup: **Docker Desktop + Hermes Gateway + SearXNG + Mnemosyne + Hermes Desktop**
 
 ## Quick Start
 
 ```powershell
-# Download and run (PowerShell as Administrator recommended)
-powershell -ExecutionPolicy Bypass -File setup.ps1 -DeepSeekApiKey "sk-your-key-here"
+# DeepSeek (default)
+powershell -ExecutionPolicy Bypass -File setup.ps1 -ApiKey "sk-..."
+
+# OpenRouter
+powershell -ExecutionPolicy Bypass -File setup.ps1 -Provider openrouter -Model "anthropic/claude-sonnet-4.6" -ApiKey "sk-or-..."
+
+# Anthropic
+powershell -ExecutionPolicy Bypass -File setup.ps1 -Provider anthropic -Model "claude-sonnet-4.6" -ApiKey "sk-ant-..."
+
+# Preview without installing
+powershell -ExecutionPolicy Bypass -File setup.ps1 -DryRun
 ```
+
+## Supported Providers
+
+| Provider    | Default Model                 | API Key Env            |
+|-------------|-------------------------------|------------------------|
+| `deepseek`  | `deepseek-chat`               | `DEEPSEEK_API_KEY`     |
+| `openrouter`| `anthropic/claude-sonnet-4.6` | `OPENROUTER_API_KEY`   |
+| `anthropic` | `claude-sonnet-4.6`           | `ANTHROPIC_API_KEY`    |
+| `openai`    | `gpt-4o`                      | `OPENAI_API_KEY`       |
+| `google`    | `gemini-2.5-pro`              | `GOOGLE_API_KEY`       |
 
 ## What Gets Installed
 
-| Component | Role | Port |
-|---|---|---|
-| **Hermes Gateway** | AI agent core + web dashboard | 8642 (API), 9119 (Dashboard) |
-| **SearXNG** | Private metasearch engine | 8080 (internal) |
-| **Mnemosyne** | Persistent memory backend | 8081 (internal) |
-| **Hermes Desktop** | Native Windows app | Connected to localhost:9119 |
+| Service         | Container          | Port(s)            |
+|-----------------|--------------------|--------------------|
+| Hermes Gateway  | `hermes`           | 8642 (API), 9119 (Dashboard) |
+| SearXNG         | `searxng-core`     | 127.0.0.1:8080     |
+| SearXNG Cache   | `searxng-valkey`   | —                  |
+| Mnemosyne       | `mnemosyne`        | 127.0.0.1:8081     |
 
-## Prerequisites
+All containers share `hermes-net` — no manual network wiring needed.
 
-- Windows 11 (x64)
-- Internet connection
-- ~20 GB free disk space
-- PowerShell 5.1+ (built-in)
+## Features
 
-## Parameters
+- **Dry-run**: `-DryRun` shows what will happen without changes
+- **Checkpoint/resume**: survives crashes — re-running picks up where it left off
+- **Retry logic**: transient failures (download, Docker startup) retry up to 3x
+- **Unified compose**: `docker compose up -d` / `docker compose logs -f` / `docker compose down`
 
-| Parameter | Description | Default |
-|---|---|---|
-| `-DeepSeekApiKey` | DeepSeek API key (sk-...) | Prompted |
-| `-InstallDir` | Root directory for project files | `%USERPROFILE%\hermes-stack` |
-| `-Model` | LLM model | `deepseek-chat` |
-| `-Provider` | LLM provider | `deepseek` |
-
-## File Structure After Setup
+## File Structure
 
 ```
-%USERPROFILE%\
-├── .hermes\              # Hermes config, sessions, skills, memory
-│   ├── .env              # API keys + secrets
-│   └── config.yaml       # Main configuration
-├── hermes-stack\          # This project
-│   ├── setup.ps1          # Main setup script
-│   ├── credentials.txt    # Generated credentials (KEEP SAFE!)
-│   ├── searxng\           # SearXNG docker-compose project
-│   └── mnemosyne\         # Mnemosyne docker-compose project
+hermes-stack/
+├── setup.ps1               # Main installer
+├── docker-compose.yml      # All services
+├── Dockerfile.mnemosyne     # Mnemosyne image
+├── searxng-settings.yml    # SearXNG config
+├── .env                     # Stack env vars (MCP_TOKEN, ports)
+├── .env.searxng            # SearXNG env
+├── .gitignore
+├── .gitattributes
+├── README.md
+├── credentials.txt          # Generated (KEEP SAFE!)
+└── .hermes-stack-state.json # Checkpoint state (auto-generated)
+```
+
+## Managing
+
+```powershell
+cd $env:USERPROFILE\hermes-stack
+
+# View status
+docker compose ps
+
+# View logs
+docker compose logs -f
+
+# Restart all
+docker compose restart
+
+# Full stop
+docker compose down
 ```
 
 ## After Setup
 
-1. Launch Hermes Desktop from Start Menu
-2. Sign in with:
-   - Username: `admin`
-   - Password: see `credentials.txt`
-3. Chat with your agent — it has web search (SearXNG) and persistent memory (Mnemosyne)
-
-## Managing Containers
-
-```powershell
-# View all containers
-docker ps
-
-# View logs
-docker logs hermes
-docker logs searxng-core
-docker logs mnemosyne
-
-# Restart a service
-docker restart hermes
-
-# Full restart of all services
-docker restart hermes searxng-core searxng-valkey mnemosyne
-```
-
-## Troubleshooting
-
-| Problem | Solution |
-|---|---|
-| Docker not found | Install Docker Desktop manually from https://docker.com |
-| Hermes API 401 | Check `%USERPROFILE%\.hermes\.env` — verify DEEPSEEK_API_KEY |
-| SearXNG not working | `docker logs searxng-core` — check for search engine captchas |
-| Memory not working | `docker exec hermes hermes memory status` |
-| Desktop can't connect | Check `%APPDATA%\hermes\connection.json` has `localhost:9119` |
+1. Launch **Hermes Desktop** from Start Menu
+2. Sign in: `admin` / password from `credentials.txt`
+3. Your agent has web search (SearXNG) + persistent memory (Mnemosyne)

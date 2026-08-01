@@ -1,8 +1,12 @@
 # Hermes Agent Stack
 
-# Credentials (NEVER commit these)
+# Credentials (NEVER commit)
 credentials.txt
 .env
+.env.searxng
+
+# Checkpoint state (auto-generated)
+.hermes-stack-state.json
 
 # OS files
 Thumbs.db
