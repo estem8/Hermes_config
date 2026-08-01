@@ -85,6 +85,12 @@ function Invoke-Retry([ScriptBlock]$Script, [int]$Max=3, [int]$Delay=5, [string]
     throw "$Desc -- all $Max attempts failed"
 }
 
+# Helper: write UTF-8 without BOM (works on PS 5.1 and 7+)
+function Write-File($path, $content) {
+    $utf8NoBom = New-Object System.Text.UTF8Encoding $false
+    [System.IO.File]::WriteAllText($path, $content, $utf8NoBom)
+}
+
 # Checkpoint state management
 $StateFile = "$InstallDir\.hermes-stack-state.json"
 function Get-State {
@@ -190,7 +196,7 @@ SEARXNG_URL=http://searxng-core:8080
 HERMES_DASHBOARD_BASIC_AUTH_USERNAME=admin
 HERMES_DASHBOARD_BASIC_AUTH_PASSWORD=$dashPass
 HERMES_DASHBOARD_BASIC_AUTH_SECRET=$dashSec
-"@ | Out-File -Encoding utf8NoBOM "$dotHermes\.env"
+"@ | Write-File "$dotHermes\.env"
     Write-OK "Hermes .env"
 
     # Write Hermes config.yaml
@@ -212,7 +218,7 @@ approvals:
 display:
   language: ru
   show_cost: true
-"@ | Out-File -Encoding utf8NoBOM "$dotHermes\config.yaml"
+"@ | Write-File "$dotHermes\config.yaml"
     Write-OK "Hermes config.yaml"
 
     # Write stack .env for docker-compose
@@ -223,19 +229,19 @@ HERMES_DASHBOARD_PORT=9119
 SEARXNG_HOST=127.0.0.1
 SEARXNG_PORT=8080
 MNEMOSYNE_PORT=127.0.0.1:8081
-"@ | Out-File -Encoding utf8NoBOM "$InstallDir\.env"
+"@ | Write-File "$InstallDir\.env"
     Write-OK "Stack .env"
 
     # SearXNG env
     @"
 SEARXNG_HOST=127.0.0.1
 SEARXNG_PORT=8080
-"@ | Out-File -Encoding utf8NoBOM "$InstallDir\.env.searxng"
+"@ | Write-File "$InstallDir\.env.searxng"
     Write-OK "SearXNG env"
 
     # Fix searxng-settings.yml with real secret
     (Get-Content "$InstallDir\searxng-settings.yml" -Raw) -replace '\$SEARXNG_SECRET_PLACEHOLDER', $searxngSec |
-        Out-File -Encoding utf8NoBOM "$InstallDir\searxng-settings.yml"
+        Write-File "$InstallDir\searxng-settings.yml"
     Write-OK "SearXNG settings"
 
     # Save credentials
@@ -252,7 +258,7 @@ SearXNG Secret: $searxngSec
 $Provider API Key: $($ApiKey.Substring(0,[Math]::Min(6,$ApiKey.Length)))...
 
 Save this file in a secure location!
-"@ | Out-File -Encoding utf8NoBOM "$InstallDir\credentials.txt"
+"@ | Write-File "$InstallDir\credentials.txt"
 
     Set-State $step
 }
@@ -380,7 +386,7 @@ else {
         mode = "remote"
         remote = @{ url = "http://localhost:9119"; authMode = "basic" }
         profiles = @{}
-    } | ConvertTo-Json -Depth 3 | Out-File -Encoding utf8NoBOM "$connDir\connection.json"
+    } | ConvertTo-Json -Depth 3 | Write-File "$connDir\connection.json"
     Write-OK "Connection → http://localhost:9119"
 
     Set-State $step
