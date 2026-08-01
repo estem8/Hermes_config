@@ -73,7 +73,7 @@ services:
   # ── Hermes WebUI — browser interface (desktop + mobile) ──
   webui:
     build:
-      context: https://github.com/nesquena/hermes-webui.git#main
+      context: https://github.com/nesquena/hermes-webui.git#master
     container_name: hermes-webui
     restart: unless-stopped
     ports:
