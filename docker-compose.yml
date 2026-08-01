@@ -80,6 +80,7 @@ services:
       - "${WEBUI_PORT:-8082}:8787"
     environment:
       - HERMES_API_URL=http://hermes:9119
+      - HERMES_WEBUI_STATE_DIR=/home/hermeswebui/.hermes/webui
     networks:
       - hermes-net
 

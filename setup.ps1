@@ -86,9 +86,17 @@ function Invoke-Retry([ScriptBlock]$Script, [int]$Max=3, [int]$Delay=5, [string]
 }
 
 # Helper: write UTF-8 without BOM (works on PS 5.1 and 7+)
-function Write-File($path, $content) {
-    $utf8NoBom = New-Object System.Text.UTF8Encoding $false
-    [System.IO.File]::WriteAllText($path, $content, $utf8NoBom)
+function Write-File {
+    param(
+        [Parameter(Mandatory, Position=0)] [string]$Path,
+        [Parameter(ValueFromPipeline, Position=1)] [string]$Content
+    )
+    begin { $sb = New-Object System.Text.StringBuilder }
+    process { [void]$sb.AppendLine($Content) }
+    end {
+        $utf8NoBom = New-Object System.Text.UTF8Encoding $false
+        [System.IO.File]::WriteAllText($Path, $sb.ToString().TrimEnd("`r`n"), $utf8NoBom)
+    }
 }
 
 # Checkpoint state management
