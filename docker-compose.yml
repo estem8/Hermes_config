@@ -14,6 +14,7 @@ services:
       - "${HERMES_DASHBOARD_PORT:-9119}:9119"
     volumes:
       - "${USERPROFILE:-C:/Users/user}/.hermes:/opt/data"
+      - hermes-agent-src:/opt/hermes
     environment:
       - HERMES_DASHBOARD=1
       - API_SERVER_ENABLED=true
@@ -81,9 +82,15 @@ services:
     restart: unless-stopped
     ports:
       - "${WEBUI_PORT:-8082}:8787"
+    volumes:
+      # Patched init: installs hermes-agent editable (-e) to bypass wheel-build guard
+      - ./webui/init-override.bash:/hermeswebui_init.bash:ro
+      # Agent source shared from hermes container (read-only) for editable install
+      - hermes-agent-src:/home/hermeswebui/.hermes/hermes-agent:ro
     environment:
       - HERMES_API_URL=http://hermes:8642
       - HERMES_WEBUI_STATE_DIR=/home/hermeswebui/.hermes/webui
+      - HERMES_WEBUI_AGENT_DIR=/home/hermeswebui/.hermes/hermes-agent
       - WANTED_UID=1000
       - WANTED_GID=1000
     depends_on:
@@ -96,6 +103,7 @@ networks:
     driver: bridge
 
 volumes:
+  hermes-agent-src:
   searxng-cache:
   valkey-data:
   mnemosyne-data:
