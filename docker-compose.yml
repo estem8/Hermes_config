@@ -5,6 +5,7 @@ services:
   hermes:
     image: nousresearch/hermes-agent:latest
     container_name: hermes
+    command: ["gateway", "run"]
     restart: unless-stopped
     mem_limit: 4g
     cpus: 2
