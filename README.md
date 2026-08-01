@@ -104,6 +104,28 @@ Your agent has:
 - **Persistent memory** via Mnemosyne (`memory.provider=mnemosyne`, MCP server)
 - **Dashboard** on `http://localhost:9119` (basic auth)
 
+## Updating
+
+```powershell
+cd $env:USERPROFILE\hermes-stack
+
+# 1. Pull latest images (hermes, searxng, valkey) and recreate containers
+docker compose pull
+docker compose up -d
+
+# 2. Update Hermes inside the container (self-updater)
+docker exec hermes hermes update
+docker restart hermes
+
+# 3. Update this script/stack repo
+git pull
+
+# 4. Full rebuild from scratch (new configs, new secrets)
+powershell -ExecutionPolicy Bypass -File setup.ps1 -ResetState -ApiKey "sk-..."
+```
+
+> `setup.ps1 -ResetState` regenerates dashboard password and MCP token — update `credentials.txt` afterwards.
+
 ## Troubleshooting
 
 | Symptom | Fix |

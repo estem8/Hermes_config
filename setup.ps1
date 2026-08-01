@@ -44,6 +44,8 @@ param(
 
     [switch]$ResetState,
 
+    [switch]$Pause,
+
     [string]$InstallDir = "$env:USERPROFILE\hermes-stack"
 )
 
@@ -96,9 +98,9 @@ function Write-StatusBar {
 function Invoke-Retry([ScriptBlock]$Script, [int]$Max=3, [int]$Delay=5, [string]$Desc="") {
     for ($i=1; $i -le $Max; $i++) {
         try {
-            if ($DryRun) { Write-INFO "[dry-run] would: $Desc"; return $true }
-            & $Script
-            return $true
+            if ($DryRun) { Write-INFO "[dry-run] would: $Desc"; return }
+            $null = & $Script 2>&1
+            return
         } catch {
             Write-WARN "$Desc -- attempt $i/$Max failed: $_"
             if ($i -lt $Max) { Start-Sleep $Delay }
@@ -398,10 +400,13 @@ else {
         Write-OK "SearXNG -- HTTP $($r.StatusCode)"
     } catch { Write-WARN "SearXNG: $_" }
 
-    # Mnemosyne
+    # Mnemosyne (TCP probe — /sse is a streaming endpoint and would hang
+    # Invoke-WebRequest, so check the port is accepting connections)
     try {
-        $r = Invoke-WebRequest -Uri "http://localhost:8081/sse" -TimeoutSec 5 -UseBasicParsing -Headers @{Authorization="Bearer $mcpTok"}
-        Write-OK "Mnemosyne -- HTTP $($r.StatusCode)"
+        $tcp = New-Object System.Net.Sockets.TcpClient
+        $tcp.Connect("127.0.0.1", 8081)
+        $tcp.Close()
+        Write-OK "Mnemosyne -- port 8081 open"
     } catch { Write-WARN "Mnemosyne: $_" }
 
     # Memory provider
@@ -508,5 +513,11 @@ Write-Host "  Launch Desktop: Start-Process `"$env:LOCALAPPDATA\hermes\hermes-ag
 Write-Host "  Status:         cd $InstallDir && docker compose ps"
 Write-Host "  Logs:           cd $InstallDir && docker compose logs -f"
 Write-Host ""
+Write-Host "  -- Updates --" -ForegroundColor Yellow
+Write-Host "  Images:  cd $InstallDir && docker compose pull && docker compose up -d"
+Write-Host "  Hermes:  docker exec hermes hermes update"
+Write-Host "  Script:  cd $InstallDir && git pull"
+Write-Host ""
 Write-Host "  Rerun setup with -ResetState to rebuild everything from scratch."
 Write-Host ""
+if ($Pause) { Read-Host "Press Enter to close" }
