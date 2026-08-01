@@ -42,6 +42,8 @@ param(
 
     [switch]$DryRun,
 
+    [switch]$ResetState,
+
     [string]$InstallDir = "$env:USERPROFILE\hermes-stack"
 )
 
@@ -115,8 +117,18 @@ function Set-State($step) {
     $s | ConvertTo-Json -Depth 3 | ForEach-Object { Write-File $StateFile $_ }
 }
 function Is-Completed($step) {
+    if ($ResetState) { return $false }
     $s = Get-State
     return $step -in $s.completed
+}
+
+# ═══════════════════════════════════════════
+# RESET STATE
+# ═══════════════════════════════════════════
+if ($ResetState) {
+    Write-WARN "Resetting checkpoint state -- all steps will re-run"
+    Remove-Item $StateFile -ErrorAction SilentlyContinue
+    Remove-Item "$InstallDir\credentials.txt" -ErrorAction SilentlyContinue
 }
 
 # ═══════════════════════════════════════════
@@ -405,9 +417,17 @@ else {
 # SUMMARY
 # ═══════════════════════════════════════════
 # Recover secrets from file if steps were skipped (checkpoint/resume)
-if (-not $dashPass -and (Test-Path "$InstallDir\credentials.txt")) {
-    $credContent = Get-Content "$InstallDir\credentials.txt" -Raw
-    if ($credContent -match 'Password: (\S+)') { $dashPass = $Matches[1] }
+if (-not $dashPass -or -not $dotHermes) {
+    $dotHermes = "$env:USERPROFILE\.hermes"
+    # Try credentials.txt first, then fall back to .env
+    if (Test-Path "$InstallDir\credentials.txt") {
+        $credContent = Get-Content "$InstallDir\credentials.txt" -Raw
+        if ($credContent -match 'Password: (\S+)') { $dashPass = $Matches[1] }
+    }
+    if (-not $dashPass -and (Test-Path "$dotHermes\.env")) {
+        $envContent = Get-Content "$dotHermes\.env" -Raw
+        if ($envContent -match 'DASHBOARD_BASIC_AUTH_PASSWORD=(\S+)') { $dashPass = $Matches[1] }
+    }
 }
 Write-Host ""
 Write-Host "=== Hermes Agent Stack v2 -- Ready ==============================="
