@@ -404,21 +404,22 @@ else {
 # ═══════════════════════════════════════════
 # SUMMARY
 # ═══════════════════════════════════════════
-Write-Host @"
-
-╔══════════════════════════════════════════════════════════════╗
-║          Hermes Agent Stack v2 -- Ready                       ║
-╠══════════════════════════════════════════════════════════════╣
-║  Provider: $($Provider.PadRight(20)) Model: $Model
-║  Dashboard:  http://localhost:9119
-║  Login:      admin / $dashPass
-║  Configs:    $dotHermes
-║  Credentials: $InstallDir\credentials.txt
-║  State:      $StateFile
-╚══════════════════════════════════════════════════════════════╝
-
-  Launch Desktop: Start-Process "$env:LOCALAPPDATA\hermes\hermes-agent\apps\desktop\Hermes Agent.exe"
-  Manage:         cd $InstallDir && docker compose ps
-  Logs:           cd $InstallDir && docker compose logs -f
-
-"@
+# Recover secrets from file if steps were skipped (checkpoint/resume)
+if (-not $dashPass -and (Test-Path "$InstallDir\credentials.txt")) {
+    $credContent = Get-Content "$InstallDir\credentials.txt" -Raw
+    if ($credContent -match 'Password: (\S+)') { $dashPass = $Matches[1] }
+}
+Write-Host ""
+Write-Host "=== Hermes Agent Stack v2 -- Ready ==============================="
+Write-Host "  Provider:    $Provider / $Model"
+Write-Host "  Dashboard:   http://localhost:9119"
+Write-Host "  Login:       admin / $dashPass"
+Write-Host "  Configs:     $dotHermes"
+Write-Host "  Credentials: $InstallDir\credentials.txt"
+Write-Host "  State:       $StateFile"
+Write-Host "=================================================================="
+Write-Host ""
+Write-Host "  Launch Desktop: Start-Process `"$env:LOCALAPPDATA\hermes\hermes-agent\apps\desktop\Hermes Agent.exe`""
+Write-Host "  Manage:         cd $InstallDir && docker compose ps"
+Write-Host "  Logs:           cd $InstallDir && docker compose logs -f"
+Write-Host ""
