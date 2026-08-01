@@ -70,6 +70,19 @@ services:
     networks:
       - hermes-net
 
+  # ── Hermes WebUI — browser interface (desktop + mobile) ──
+  webui:
+    build:
+      context: https://github.com/nesquena/hermes-webui.git#main
+    container_name: hermes-webui
+    restart: unless-stopped
+    ports:
+      - "${WEBUI_PORT:-8082}:8787"
+    environment:
+      - HERMES_API_URL=http://hermes:9119
+    networks:
+      - hermes-net
+
 networks:
   hermes-net:
     driver: bridge
