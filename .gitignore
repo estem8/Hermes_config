@@ -1,0 +1,16 @@
+# Hermes Agent Stack
+
+# Credentials (NEVER commit these)
+credentials.txt
+.env
+
+# OS files
+Thumbs.db
+Desktop.ini
+.DS_Store
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
