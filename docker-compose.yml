@@ -13,7 +13,7 @@ services:
       - "${HERMES_API_PORT:-8642}:8642"
       - "${HERMES_DASHBOARD_PORT:-9119}:9119"
     volumes:
-      - hermes-data:/opt/data
+      - "${USERPROFILE:-C:/Users/user}/.hermes:/opt/data"
     environment:
       - HERMES_DASHBOARD=1
       - API_SERVER_ENABLED=true
@@ -90,7 +90,6 @@ networks:
     driver: bridge
 
 volumes:
-  hermes-data:
   searxng-cache:
   valkey-data:
   mnemosyne-data:
