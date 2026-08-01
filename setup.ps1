@@ -75,6 +75,23 @@ function Write-WARN ($msg) { Write-Host "   WARN $msg" -ForegroundColor Yellow }
 function Write-ERR  ($msg) { Write-Host "   ERR $msg" -ForegroundColor Red }
 function Write-INFO ($msg) { Write-Host "   $msg" -ForegroundColor Gray }
 
+# ── Status bar ────────────────────────────────────────────
+$StepNames = @("Prerequisites", "Directories & secrets", "Containers", "Mnemosyne plugin", "Verify health", "Hermes Desktop")
+$StepTotal = $StepNames.Count
+$StepCurrent = 0
+
+function Write-StatusBar {
+    # ASCII progress bar: [####------] 2/6 Prerequisites
+    $script:StepCurrent++
+    $idx = $StepCurrent - 1
+    $w = 24
+    $filled = [Math]::Floor($StepCurrent * $w / $StepTotal)
+    $bar = "[" + ("#" * $filled) + ("-" * ($w - $filled)) + "]"
+    $label = if ($idx -lt $StepNames.Count) { $StepNames[$idx] } else { "" }
+    Write-Host ""
+    Write-Host "  $bar  $StepCurrent/$StepTotal $label" -ForegroundColor Cyan
+}
+
 # Retry a scriptblock up to $max times with $delay seconds between
 function Invoke-Retry([ScriptBlock]$Script, [int]$Max=3, [int]$Delay=5, [string]$Desc="") {
     for ($i=1; $i -le $Max; $i++) {
@@ -160,6 +177,7 @@ if ($DryRun) {
 # STEP 1: PREREQUISITES
 # ═══════════════════════════════════════════
 $step = "prerequisites"
+Write-StatusBar
 if (Is-Completed $step) { Write-OK "Step '$step' already done -- skipping" }
 else {
     Write-Step "STEP 1: Prerequisites"
@@ -196,6 +214,7 @@ else {
 # STEP 2: DIRECTORIES & SECRETS
 # ═══════════════════════════════════════════
 $step = "directories"
+Write-StatusBar
 if (Is-Completed $step) { Write-OK "Step '$step' already done -- skipping" }
 else {
     Write-Step "STEP 2: Directories & secrets"
@@ -290,6 +309,7 @@ Save this file in a secure location!
 # STEP 3: COMPOSE UP
 # ═══════════════════════════════════════════
 $step = "containers"
+Write-StatusBar
 if (Is-Completed $step) { Write-OK "Step '$step' already done -- skipping" }
 else {
     Write-Step "STEP 3: Launching containers (docker compose up)"
@@ -329,6 +349,7 @@ else {
 # STEP 4: MNEMOSYNE PLUGIN
 # ═══════════════════════════════════════════
 $step = "plugin"
+Write-StatusBar
 if (Is-Completed $step) { Write-OK "Step '$step' already done -- skipping" }
 else {
     Write-Step "STEP 4: Installing Mnemosyne plugin"
@@ -352,6 +373,7 @@ else {
 # STEP 5: VERIFY
 # ═══════════════════════════════════════════
 $step = "verify"
+Write-StatusBar
 if (Is-Completed $step) { Write-OK "Step '$step' already done -- skipping" }
 else {
     Write-Step "STEP 5: Verifying stack health"
@@ -394,6 +416,7 @@ else {
 # STEP 6: DESKTOP
 # ═══════════════════════════════════════════
 $step = "desktop"
+Write-StatusBar
 if (Is-Completed $step) { Write-OK "Step '$step' already done -- skipping" }
 else {
     Write-Step "STEP 6: Hermes Desktop"
@@ -438,17 +461,52 @@ if (-not $dashPass -or -not $dotHermes) {
         if ($envContent -match 'DASHBOARD_BASIC_AUTH_PASSWORD=(\S+)') { $dashPass = $Matches[1] }
     }
 }
+
+# Ports for the copy-paste links — read from stack .env (set in step 2),
+# fall back to compose defaults.
+$dashPort   = "9119"; $apiPort = "8642"; $searchPort = "8080"; $memPort = "8081"
+if (Test-Path "$InstallDir\.env") {
+    $stackEnv = Get-Content "$InstallDir\.env" -Raw
+    if ($stackEnv -match 'HERMES_DASHBOARD_PORT=(\d+)') { $dashPort = $Matches[1] }
+    if ($stackEnv -match 'HERMES_API_PORT=(\d+)')        { $apiPort = $Matches[1] }
+    if ($stackEnv -match 'SEARXNG_PORT=(\d+)')           { $searchPort = $Matches[1] }
+    if ($stackEnv -match 'MNEMOSYNE_PORT=.*?:(\d+)')     { $memPort = $Matches[1] }
+}
+
+$dashUrl   = "http://localhost:$dashPort"
+$apiUrl    = "http://localhost:$apiPort/v1"
+$searchUrl = "http://localhost:$searchPort"
+$memUrl    = "http://localhost:$memPort/sse"
+
 Write-Host ""
-Write-Host "=== Hermes Agent Stack v2 -- Ready ==============================="
+Write-Host "  $('#' * 72)" -ForegroundColor Cyan
+Write-Host "  #  Hermes Agent Stack -- Ready" -ForegroundColor Cyan
+Write-Host "  $('#' * 72)" -ForegroundColor Cyan
 Write-Host "  Provider:    $Provider / $Model"
-Write-Host "  Dashboard:   http://localhost:9119"
+Write-Host "  Dashboard:   $dashUrl"
 Write-Host "  Login:       admin / $dashPass"
 Write-Host "  Configs:     $dotHermes"
 Write-Host "  Credentials: $InstallDir\credentials.txt"
 Write-Host "  State:       $StateFile"
-Write-Host "=================================================================="
+Write-Host "  $('#' * 72)" -ForegroundColor Cyan
 Write-Host ""
+Write-Host "  -- Copy-paste links --" -ForegroundColor Yellow
+Write-Host ""
+Write-Host "  Hermes Dashboard :  $dashUrl" -ForegroundColor White
+Write-Host "  Hermes API       :  $apiUrl" -ForegroundColor White
+Write-Host "  SearXNG (search) :  $searchUrl" -ForegroundColor White
+Write-Host "  Mnemosyne (MCP)  :  $memUrl" -ForegroundColor White
+Write-Host ""
+Write-Host "  -- Hermes Desktop connection --" -ForegroundColor Yellow
+Write-Host "  Settings -> Gateway -> Remote gateway ->" -ForegroundColor White
+Write-Host "  URL:  $dashUrl" -ForegroundColor White
+Write-Host "  User: admin" -ForegroundColor White
+Write-Host "  Pass: $dashPass" -ForegroundColor White
+Write-Host ""
+Write-Host "  -- Commands --" -ForegroundColor Yellow
 Write-Host "  Launch Desktop: Start-Process `"$env:LOCALAPPDATA\hermes\hermes-agent\apps\desktop\Hermes Agent.exe`""
-Write-Host "  Manage:         cd $InstallDir && docker compose ps"
+Write-Host "  Status:         cd $InstallDir && docker compose ps"
 Write-Host "  Logs:           cd $InstallDir && docker compose logs -f"
+Write-Host ""
+Write-Host "  Rerun setup with -ResetState to rebuild everything from scratch."
 Write-Host ""

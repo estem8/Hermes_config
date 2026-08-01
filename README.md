@@ -1,22 +1,29 @@
-# Hermes Agent Stack v2 — Windows 11 Automated Setup
+# Hermes Agent Stack — Windows 11 Automated Setup
 
-One-command setup: **Docker Desktop + Hermes Gateway + SearXNG + Mnemosyne + Hermes Desktop**
+One-command setup for a local AI-agent stack: **Hermes Gateway (Docker) + SearXNG + Mnemosyne + Hermes Desktop**.
+
+Everything runs under Docker Desktop on Windows 11 and is managed by a single `docker-compose.yml` plus an idempotent `setup.ps1`.
 
 ## Quick Start
 
 ```powershell
-# DeepSeek (default)
+# DeepSeek (default provider)
 powershell -ExecutionPolicy Bypass -File setup.ps1 -ApiKey "sk-..."
 
-# OpenRouter
+# Other providers
 powershell -ExecutionPolicy Bypass -File setup.ps1 -Provider openrouter -Model "anthropic/claude-sonnet-4.6" -ApiKey "sk-or-..."
-
-# Anthropic
 powershell -ExecutionPolicy Bypass -File setup.ps1 -Provider anthropic -Model "claude-sonnet-4.6" -ApiKey "sk-ant-..."
+powershell -ExecutionPolicy Bypass -File setup.ps1 -Provider openai -Model "gpt-4o" -ApiKey "sk-..."
+powershell -ExecutionPolicy Bypass -File setup.ps1 -Provider google -Model "gemini-2.5-pro" -ApiKey "AIza..."
 
-# Preview without installing
+# Preview without making changes
 powershell -ExecutionPolicy Bypass -File setup.ps1 -DryRun
+
+# Rebuild everything from scratch (clears checkpoint state + credentials)
+powershell -ExecutionPolicy Bypass -File setup.ps1 -ResetState -ApiKey "sk-..."
 ```
+
+> **Tip:** the script prints a live status bar (`[######----] 4/6 Mnemosyne plugin`) and ends with copy-paste links for the dashboard, API, SearXNG, Mnemosyne, and the Desktop connection settings.
 
 ## Supported Providers
 
@@ -30,59 +37,78 @@ powershell -ExecutionPolicy Bypass -File setup.ps1 -DryRun
 
 ## What Gets Installed
 
-| Service         | Container          | Port(s)            |
-|-----------------|--------------------|--------------------|
-| Hermes Gateway  | `hermes`           | 8642 (API), 9119 (Dashboard) |
-| SearXNG         | `searxng-core`     | 127.0.0.1:8080     |
-| SearXNG Cache   | `searxng-valkey`   | —                  |
-| Mnemosyne       | `mnemosyne`        | 127.0.0.1:8081     |
+| Service        | Container        | Port(s)                        |
+|----------------|------------------|--------------------------------|
+| Hermes Gateway | `hermes`         | 8642 (API), 9119 (Dashboard)   |
+| SearXNG        | `searxng-core`   | 127.0.0.1:8080 (search)        |
+| SearXNG Cache  | `searxng-valkey` | — (internal)                   |
+| Mnemosyne      | `mnemosyne`      | 127.0.0.1:8081 (MCP SSE)       |
 
-All containers share `hermes-net` — no manual network wiring needed.
+All containers share the `hermes-net` network — no manual wiring needed.
 
 ## Features
 
-- **Dry-run**: `-DryRun` shows what will happen without changes
-- **Checkpoint/resume**: survives crashes — re-running picks up where it left off
-- **Retry logic**: transient failures (download, Docker startup) retry up to 3x
-- **Unified compose**: `docker compose up -d` / `docker compose logs -f` / `docker compose down`
+- **Live status bar** — `[####------] 3/6 Containers` shows progress through the 6 setup steps
+- **Copy-paste links** — final summary prints dashboard/API/SearXNG/Mnemosyne URLs and the Desktop connection settings (URL / user / pass) ready to copy
+- **Dry-run**: `-DryRun` shows what would happen, changes nothing
+- **Checkpoint/resume**: state lives in `.hermes-stack-state.json`; re-running picks up where it left off (crashes safe)
+- **Reset**: `-ResetState` clears checkpoints + `credentials.txt` and rebuilds from scratch
+- **Retry logic**: transient failures (downloads, Docker startup, compose up) retry with backoff
+- **Multi-provider**: DeepSeek / OpenRouter / Anthropic / OpenAI / Google via one parameter
+- **Unified compose**: `docker compose up -d` / `logs -f` / `down`
 
 ## File Structure
 
 ```
 hermes-stack/
-├── setup.ps1               # Main installer
-├── docker-compose.yml      # All services
+├── setup.ps1               # Main installer (status bar + links)
+├── docker-compose.yml      # hermes + searxng + valkey + mnemosyne
 ├── Dockerfile.mnemosyne     # Mnemosyne image
-├── searxng-settings.yml    # SearXNG config
-├── .env                     # Stack env vars (MCP_TOKEN, ports)
-├── .env.searxng            # SearXNG env
+├── searxng-settings.yml    # SearXNG config (secret placeholder → real value at setup)
+├── .env                     # Stack env vars (MCP_TOKEN, ports) — NOT in git
+├── .env.searxng            # SearXNG env — NOT in git
 ├── .gitignore
 ├── .gitattributes
 ├── README.md
-├── credentials.txt          # Generated (KEEP SAFE!)
+├── credentials.txt          # Generated on first run (KEEP SAFE!)
 └── .hermes-stack-state.json # Checkpoint state (auto-generated)
 ```
 
-## Managing
+## Managing the Stack
 
 ```powershell
 cd $env:USERPROFILE\hermes-stack
 
-# View status
-docker compose ps
-
-# View logs
-docker compose logs -f
-
-# Restart all
-docker compose restart
-
-# Full stop
-docker compose down
+docker compose ps          # status
+docker compose logs -f     # follow logs
+docker compose restart     # restart all
+docker compose down        # full stop
 ```
+
+## Connecting Hermes Desktop
+
+1. Launch **Hermes Desktop** from the Start Menu
+2. Open **Settings → Gateway → Remote gateway**
+3. Enter the values printed by the script:
+   - **URL:** `http://localhost:9119`
+   - **User:** `admin`
+   - **Pass:** (from `credentials.txt`)
+4. **Save and reconnect**
+
+The desktop app talks to the gateway in Docker through `localhost:9119` — no extra configuration needed.
 
 ## After Setup
 
-1. Launch **Hermes Desktop** from Start Menu
-2. Sign in: `admin` / password from `credentials.txt`
-3. Your agent has web search (SearXNG) + persistent memory (Mnemosyne)
+Your agent has:
+- **Web search** via SearXNG (`web.search_backend=searxng`)
+- **Persistent memory** via Mnemosyne (`memory.provider=mnemosyne`, MCP server)
+- **Dashboard** on `http://localhost:9119` (basic auth)
+
+## Troubleshooting
+
+| Symptom | Fix |
+|---------|-----|
+| Script stuck at step 3 ("compose up failed") | Ensure Docker Desktop is running, then re-run — checkpoints resume |
+| `SearXNG -- HTTP 000` in verify step | Check `docker network connect searxng_default hermes` after manual container recreation |
+| Wrong dashboard password | See `credentials.txt`; reset with `-ResetState` |
+| Port 9119/8642 busy | Change ports in `.env` (`HERMES_DASHBOARD_PORT`, `HERMES_API_PORT`) then `docker compose up -d` |
