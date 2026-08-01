@@ -42,6 +42,8 @@ param(
 
     [switch]$DryRun,
 
+    [switch]$Install,
+
     [switch]$ResetState,
 
     [switch]$Pause,
@@ -144,6 +146,84 @@ function Is-Completed($step) {
     return $step -in $s.completed
 }
 
+# ── Status panel + menu ─────────────────────────────────
+function Test-TcpPort([int]$Port) {
+    try {
+        $tcp = New-Object System.Net.Sockets.TcpClient
+        $tcp.Connect("127.0.0.1", $Port)
+        $tcp.Close()
+        return $true
+    } catch { return $false }
+}
+
+function Test-Docker {
+    docker info 2>&1 | Out-Null
+    return ($LASTEXITCODE -eq 0)
+}
+
+function Show-StatusCell([string]$Label, [bool]$Ok) {
+    $mark = if ($Ok) { "[OK]" } else { "[FAIL]" }
+    $fg   = if ($Ok) { "Green" } else { "Red" }
+    Write-Host ("  {0,-10} {1}" -f $Label, $mark) -NoNewline -ForegroundColor $fg
+}
+
+function Show-StatusPanel {
+    Write-Host ""
+    Show-StatusCell "Docker"   (Test-Docker)
+    Show-StatusCell "API"      (Test-TcpPort 9119)
+    Show-StatusCell "Search"   (Test-TcpPort 8080)
+    Show-StatusCell "Memory"   (Test-TcpPort 8081)
+    Write-Host ""
+    Write-Host ""
+}
+
+function Show-MainMenu {
+    # Returns: "install" | "update" | "logs" | "exit"
+    while ($true) {
+        Clear-Host
+        Write-Host "  Hermes Agent Stack" -ForegroundColor Cyan
+        Show-StatusPanel
+        Write-Host "  Menu:" -ForegroundColor Yellow
+        Write-Host "    [1] Install"
+        Write-Host "    [2] Update"
+        Write-Host "    [3] Logs"
+        Write-Host "    [4] Exit"
+        Write-Host ""
+        $choice = Read-Host "  Select"
+        switch ($choice) {
+            "1" { return "install" }
+            "2" { return "update" }
+            "3" { return "logs" }
+            "4" { return "exit" }
+            default { Write-WARN "Invalid choice: $choice" }
+        }
+    }
+}
+
+function Invoke-Update {
+    Write-Step "UPDATE: pulling latest images and updating Hermes"
+    Push-Location $InstallDir
+    try {
+        Invoke-Retry -Script {
+            docker compose pull 2>&1 | Out-Null
+            if ($LASTEXITCODE -ne 0) { throw "pull failed" }
+        } -Max 2 -Desc "docker compose pull"
+        Invoke-Retry -Script {
+            docker compose up -d 2>&1 | Out-Null
+            if ($LASTEXITCODE -ne 0) { throw "compose up failed" }
+        } -Max 3 -Delay 8 -Desc "docker compose up -d"
+        $null = docker exec hermes hermes update 2>&1
+        $null = docker restart hermes 2>&1
+        Write-OK "Update complete"
+    } finally { Pop-Location }
+}
+
+function Invoke-Logs {
+    Write-Step "LOGS: docker compose logs -f (Ctrl+C to exit)"
+    Push-Location $InstallDir
+    try { docker compose logs -f } finally { Pop-Location }
+}
+
 # ═══════════════════════════════════════════
 # RESET STATE
 # ═══════════════════════════════════════════
@@ -173,6 +253,19 @@ if ($DryRun) {
     Write-Host ""
     Write-Host "Ports: 8642 (API), 9119 (dashboard), 8080 (search), 8081 (memory)"
     exit 0
+}
+
+# ═══════════════════════════════════════════
+# MAIN MENU
+# ═══════════════════════════════════════════
+if (-not $DryRun -and -not $Install) {
+    $menuAction = Show-MainMenu
+    switch ($menuAction) {
+        "update" { Invoke-Update; Write-Host ""; Read-Host "Press Enter to return"; exit 0 }
+        "logs"   { Invoke-Logs;   exit 0 }
+        "exit"   { Write-Host "Bye!"; exit 0 }
+        "install" { }  # fall through to the setup steps
+    }
 }
 
 # ═══════════════════════════════════════════

@@ -7,23 +7,32 @@ Everything runs under Docker Desktop on Windows 11 and is managed by a single `d
 ## Quick Start
 
 ```powershell
-# DeepSeek (default provider)
-powershell -ExecutionPolicy Bypass -File setup.ps1 -ApiKey "sk-..."
+# Interactive menu: status panel (Docker/API/Search/Memory) + actions
+powershell -ExecutionPolicy Bypass -File setup.ps1
+
+# Install with DeepSeek (skips menu, runs setup directly)
+powershell -ExecutionPolicy Bypass -File setup.ps1 -Install -ApiKey "sk-..."
 
 # Other providers
-powershell -ExecutionPolicy Bypass -File setup.ps1 -Provider openrouter -Model "anthropic/claude-sonnet-4.6" -ApiKey "sk-or-..."
-powershell -ExecutionPolicy Bypass -File setup.ps1 -Provider anthropic -Model "claude-sonnet-4.6" -ApiKey "sk-ant-..."
-powershell -ExecutionPolicy Bypass -File setup.ps1 -Provider openai -Model "gpt-4o" -ApiKey "sk-..."
-powershell -ExecutionPolicy Bypass -File setup.ps1 -Provider google -Model "gemini-2.5-pro" -ApiKey "AIza..."
+powershell -ExecutionPolicy Bypass -File setup.ps1 -Install -Provider openrouter -Model "anthropic/claude-sonnet-4.6" -ApiKey "sk-or-..."
+powershell -ExecutionPolicy Bypass -File setup.ps1 -Install -Provider anthropic -Model "claude-sonnet-4.6" -ApiKey "sk-ant-..."
+powershell -ExecutionPolicy Bypass -File setup.ps1 -Install -Provider openai -Model "gpt-4o" -ApiKey "sk-..."
+powershell -ExecutionPolicy Bypass -File setup.ps1 -Install -Provider google -Model "gemini-2.5-pro" -ApiKey "AIza..."
 
 # Preview without making changes
 powershell -ExecutionPolicy Bypass -File setup.ps1 -DryRun
 
 # Rebuild everything from scratch (clears checkpoint state + credentials)
-powershell -ExecutionPolicy Bypass -File setup.ps1 -ResetState -ApiKey "sk-..."
+powershell -ExecutionPolicy Bypass -File setup.ps1 -Install -ResetState -ApiKey "sk-..."
 ```
 
-> **Tip:** the script prints a live status bar (`[######----] 4/6 Mnemosyne plugin`) and ends with copy-paste links for the dashboard, API, SearXNG, Mnemosyne, and the Desktop connection settings.
+> **Interactive mode:** run `setup.ps1` without arguments to open a menu. A live status panel on top shows Docker / API / SearXNG / Mnemosyne as `[OK]`/`[FAIL]`, then choose:
+> - **1. Install** — run the 6-step setup (status bar `[####------] 4/6`)
+> - **2. Update** — `docker compose pull` + `hermes update` + restart
+> - **3. Logs** — follow `docker compose logs -f`
+> - **4. Exit**
+>
+> The final summary prints copy-paste links (dashboard, API, SearXNG, Mnemosyne) and Desktop connection settings.
 
 ## Supported Providers
 
