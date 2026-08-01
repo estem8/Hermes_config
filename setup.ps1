@@ -298,7 +298,7 @@ else {
     try {
         # Clean up any previous containers (both old standalone and compose)
         docker compose down --remove-orphans 2>&1 | Out-Null
-        docker rm -f hermes searxng-core searxng-valkey mnemosyne hermes-webui 2>&1 | Out-Null
+        docker rm -f hermes searxng-core searxng-valkey mnemosyne 2>&1 | Out-Null
 
         Invoke-Retry -Script {
             docker compose build mnemosyne 2>&1 | Out-Null
