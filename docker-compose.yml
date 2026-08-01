@@ -17,6 +17,8 @@ services:
     environment:
       - HERMES_DASHBOARD=1
       - API_SERVER_ENABLED=true
+      - API_SERVER_HOST=0.0.0.0
+      - API_SERVER_KEY=${API_SERVER_KEY:-change-me-32-hex-chars}
     networks:
       - hermes-net
 
@@ -72,16 +74,20 @@ services:
       - hermes-net
 
   # ── Hermes WebUI — browser interface (desktop + mobile) ──
+  # Uses official prebuilt image; chats route through the gateway via HERMES_API_URL
   webui:
-    build:
-      context: https://github.com/nesquena/hermes-webui.git#master
+    image: ghcr.io/nesquena/hermes-webui:latest
     container_name: hermes-webui
     restart: unless-stopped
     ports:
       - "${WEBUI_PORT:-8082}:8787"
     environment:
-      - HERMES_API_URL=http://hermes:9119
+      - HERMES_API_URL=http://hermes:8642
       - HERMES_WEBUI_STATE_DIR=/home/hermeswebui/.hermes/webui
+      - WANTED_UID=1000
+      - WANTED_GID=1000
+    depends_on:
+      - hermes
     networks:
       - hermes-net
 
