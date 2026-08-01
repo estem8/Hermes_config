@@ -50,6 +50,9 @@ param(
 $ErrorActionPreference = "Continue"
 $ProgressPreference = "SilentlyContinue"
 
+# Force TLS 1.2 for PowerShell 5.1 compatibility
+[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+
 # ═══════════════════════════════════════════
 # CONFIG: provider defaults
 # ═══════════════════════════════════════════
@@ -353,11 +356,17 @@ if (Is-Completed $step) { Write-OK "Step '$step' already done -- skipping" }
 else {
     Write-Step "STEP 5: Verifying stack health"
 
-    # Hermes API
+    # Hermes API (retry — gateway may still be initializing)
     try {
         $usr = "admin"; $pw = $dashPass
         $b64 = [Convert]::ToBase64String([Text.Encoding]::ASCII.GetBytes("$usr`:$pw"))
-        $r = Invoke-RestMethod -Uri "http://localhost:9119/api/status" -Headers @{Authorization="Basic $b64"} -TimeoutSec 15
+        $r = $null
+        for ($i=1; $i -le 5; $i++) {
+            try {
+                $r = Invoke-RestMethod -Uri "http://localhost:9119/api/status" -Headers @{Authorization="Basic $b64"} -TimeoutSec 10
+                break
+            } catch { if ($i -ge 5) { throw $_ }; Start-Sleep 3 }
+        }
         Write-OK "Hermes API v$($r.version) -- OK"
     } catch { Write-ERR "Hermes API: $_" }
 
