@@ -104,7 +104,7 @@ function Set-State($step) {
     if ($DryRun) { return }
     $s = Get-State
     if ($step -notin $s.completed) { $s.completed += $step }
-    $s | ConvertTo-Json -Depth 3 | Out-File -Encoding utf8NoBOM -FilePath $StateFile
+    $s | ConvertTo-Json -Depth 3 | ForEach-Object { Write-File $StateFile $_ }
 }
 function Is-Completed($step) {
     $s = Get-State
