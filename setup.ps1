@@ -1,6 +1,6 @@
 <#
 .SYNOPSIS
-    Hermes Agent Stack v2 — automated setup for Windows 11
+    Hermes Agent Stack v2 -- automated setup for Windows 11
     Docker Desktop + Hermes Gateway + SearXNG + Mnemosyne + Hermes Desktop
 
 .DESCRIPTION
@@ -78,11 +78,11 @@ function Invoke-Retry([ScriptBlock]$Script, [int]$Max=3, [int]$Delay=5, [string]
             & $Script
             return $true
         } catch {
-            Write-WARN "$Desc — attempt $i/$Max failed: $_"
+            Write-WARN "$Desc -- attempt $i/$Max failed: $_"
             if ($i -lt $Max) { Start-Sleep $Delay }
         }
     }
-    throw "$Desc — all $Max attempts failed"
+    throw "$Desc -- all $Max attempts failed"
 }
 
 # Checkpoint state management
@@ -109,7 +109,7 @@ function Is-Completed($step) {
 # DRY-RUN
 # ═══════════════════════════════════════════
 if ($DryRun) {
-    Write-Host "=== DRY RUN — no changes will be made ===" -ForegroundColor Magenta
+    Write-Host "=== DRY RUN -- no changes will be made ===" -ForegroundColor Magenta
     Write-Host ""
     Write-Host "Provider:   $Provider"
     Write-Host "Model:      $Model"
@@ -131,7 +131,7 @@ if ($DryRun) {
 # STEP 1: PREREQUISITES
 # ═══════════════════════════════════════════
 $step = "prerequisites"
-if (Is-Completed $step) { Write-OK "Step '$step' already done — skipping" }
+if (Is-Completed $step) { Write-OK "Step '$step' already done -- skipping" }
 else {
     Write-Step "STEP 1: Prerequisites"
 
@@ -158,7 +158,7 @@ else {
 
     # API key
     if (-not $ApiKey) { $ApiKey = Read-Host "Enter $Provider API key" }
-    if ($ApiKey.Length -lt 10) { Write-WARN "API key looks too short — verify it" }
+    if ($ApiKey.Length -lt 10) { Write-WARN "API key looks too short -- verify it" }
 
     Set-State $step
 }
@@ -167,7 +167,7 @@ else {
 # STEP 2: DIRECTORIES & SECRETS
 # ═══════════════════════════════════════════
 $step = "directories"
-if (Is-Completed $step) { Write-OK "Step '$step' already done — skipping" }
+if (Is-Completed $step) { Write-OK "Step '$step' already done -- skipping" }
 else {
     Write-Step "STEP 2: Directories & secrets"
 
@@ -240,7 +240,7 @@ SEARXNG_PORT=8080
 
     # Save credentials
     @"
-=== Hermes Agent Stack — Credentials ===
+=== Hermes Agent Stack -- Credentials ===
 Generated: $(Get-Date -Format "yyyy-MM-dd HH:mm")
 
 Dashboard: http://localhost:9119
@@ -261,7 +261,7 @@ Save this file in a secure location!
 # STEP 3: COMPOSE UP
 # ═══════════════════════════════════════════
 $step = "containers"
-if (Is-Completed $step) { Write-OK "Step '$step' already done — skipping" }
+if (Is-Completed $step) { Write-OK "Step '$step' already done -- skipping" }
 else {
     Write-Step "STEP 3: Launching containers (docker compose up)"
 
@@ -289,7 +289,7 @@ else {
     foreach ($c in $expected) {
         $running = docker ps --filter "name=$c" --format "{{.Names}}" 2>&1
         if ($running -eq $c) { Write-OK "$c running" }
-        else { Write-WARN "$c not running — check: docker logs $c" }
+        else { Write-WARN "$c not running -- check: docker logs $c" }
     }
 
     Set-State $step
@@ -299,7 +299,7 @@ else {
 # STEP 4: MNEMOSYNE PLUGIN
 # ═══════════════════════════════════════════
 $step = "plugin"
-if (Is-Completed $step) { Write-OK "Step '$step' already done — skipping" }
+if (Is-Completed $step) { Write-OK "Step '$step' already done -- skipping" }
 else {
     Write-Step "STEP 4: Installing Mnemosyne plugin"
 
@@ -322,7 +322,7 @@ else {
 # STEP 5: VERIFY
 # ═══════════════════════════════════════════
 $step = "verify"
-if (Is-Completed $step) { Write-OK "Step '$step' already done — skipping" }
+if (Is-Completed $step) { Write-OK "Step '$step' already done -- skipping" }
 else {
     Write-Step "STEP 5: Verifying stack health"
 
@@ -331,19 +331,19 @@ else {
         $usr = "admin"; $pw = $dashPass
         $b64 = [Convert]::ToBase64String([Text.Encoding]::ASCII.GetBytes("$usr`:$pw"))
         $r = Invoke-RestMethod -Uri "http://localhost:9119/api/status" -Headers @{Authorization="Basic $b64"} -TimeoutSec 15
-        Write-OK "Hermes API v$($r.version) — OK"
+        Write-OK "Hermes API v$($r.version) -- OK"
     } catch { Write-ERR "Hermes API: $_" }
 
     # SearXNG
     try {
-        $r = Invoke-WebRequest -Uri "http://localhost:8080/search?q=test&format=json" -TimeoutSec 10 -UseBasicParsing
-        Write-OK "SearXNG — HTTP $($r.StatusCode)"
+        $r = Invoke-WebRequest -Uri 'http://localhost:8080/search?q=test&format=json' -TimeoutSec 10 -UseBasicParsing
+        Write-OK "SearXNG -- HTTP $($r.StatusCode)"
     } catch { Write-WARN "SearXNG: $_" }
 
     # Mnemosyne
     try {
         $r = Invoke-WebRequest -Uri "http://localhost:8081/sse" -TimeoutSec 5 -UseBasicParsing -Headers @{Authorization="Bearer $mcpTok"}
-        Write-OK "Mnemosyne — HTTP $($r.StatusCode)"
+        Write-OK "Mnemosyne -- HTTP $($r.StatusCode)"
     } catch { Write-WARN "Mnemosyne: $_" }
 
     # Memory provider
@@ -358,7 +358,7 @@ else {
 # STEP 6: DESKTOP
 # ═══════════════════════════════════════════
 $step = "desktop"
-if (Is-Completed $step) { Write-OK "Step '$step' already done — skipping" }
+if (Is-Completed $step) { Write-OK "Step '$step' already done -- skipping" }
 else {
     Write-Step "STEP 6: Hermes Desktop"
 
@@ -392,7 +392,7 @@ else {
 Write-Host @"
 
 ╔══════════════════════════════════════════════════════════════╗
-║          Hermes Agent Stack v2 — Ready                       ║
+║          Hermes Agent Stack v2 -- Ready                       ║
 ╠══════════════════════════════════════════════════════════════╣
 ║  Provider: $($Provider.PadRight(20)) Model: $Model
 ║  Dashboard:  http://localhost:9119
