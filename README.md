@@ -74,6 +74,7 @@ hermes-stack/
 ├── docker-compose.yml      # hermes + searxng + valkey + mnemosyne
 ├── Dockerfile.mnemosyne     # Mnemosyne image
 ├── searxng-settings.yml    # SearXNG config (secret placeholder → real value at setup)
+├── specs/                   # SDD-спецификации + verify-specs.ps1
 ├── .env                     # Stack env vars (MCP_TOKEN, ports) — NOT in git
 ├── .env.searxng            # SearXNG env — NOT in git
 ├── .gitignore
