@@ -121,7 +121,10 @@ function Write-File {
     process { [void]$sb.AppendLine($Content) }
     end {
         $utf8NoBom = New-Object System.Text.UTF8Encoding $false
-        [System.IO.File]::WriteAllText($Path, $sb.ToString().TrimEnd("`r`n"), $utf8NoBom)
+        # Trailing newline обязателен: иначе последняя строка склеивается с
+        # последующими (например, Add-Content в .env) и compose ломается
+        $text = $sb.ToString().TrimEnd("`r`n") + "`r`n"
+        [System.IO.File]::WriteAllText($Path, $text, $utf8NoBom)
     }
 }
 
@@ -144,6 +147,21 @@ function Is-Completed($step) {
     if ($ResetState) { return $false }
     $s = Get-State
     return $step -in $s.completed
+}
+
+# Recover dashboard password across checkpoint/resume (credentials.txt → ~/.hermes/.env)
+function Get-DashPass {
+    if (-not $script:dashPass) {
+        if (Test-Path "$InstallDir\credentials.txt") {
+            $c = Get-Content "$InstallDir\credentials.txt" -Raw
+            if ($c -match 'Password:\s*(\S+)') { $script:dashPass = $Matches[1] }
+        }
+        if (-not $script:dashPass -and (Test-Path "$env:USERPROFILE\.hermes\.env")) {
+            $e = Get-Content "$env:USERPROFILE\.hermes\.env" -Raw
+            if ($e -match 'DASHBOARD_BASIC_AUTH_PASSWORD=(\S+)') { $script:dashPass = $Matches[1] }
+        }
+    }
+    return $script:dashPass
 }
 
 # ── Status panel + menu ─────────────────────────────────
@@ -208,6 +226,10 @@ function Invoke-Update {
             docker compose pull 2>&1 | Out-Null
             if ($LASTEXITCODE -ne 0) { throw "pull failed" }
         } -Max 2 -Desc "docker compose pull"
+        Invoke-Retry -Script {
+            docker compose build mnemosyne 2>&1 | Out-Null
+            if ($LASTEXITCODE -ne 0) { throw "build failed" }
+        } -Max 2 -Desc "Build Mnemosyne"
         Invoke-Retry -Script {
             docker compose up -d 2>&1 | Out-Null
             if ($LASTEXITCODE -ne 0) { throw "compose up failed" }
@@ -323,8 +345,11 @@ else {
     # Generate secrets
     $dashPass  = -join ((48..57)+(65..90)+(97..122) | Get-Random -Count 16 | %{[char]$_})
     $dashSec   = -join ((48..57)+(65..90)+(97..122) | Get-Random -Count 44 | %{[char]$_}) + "=="
-    $mcpTok    = -join ((48..57)+(65..70) | Get-Random -Count 64 | %{[char]$_})
+    # NOTE: Get-Random -Count не повторяет элементы, поэтому hex-строки генерим
+    # посимвольно: иначе длина упирается в размер алфавита (16) вместо 64/32.
+    $mcpTok    = -join (1..64 | %{ '{0:x}' -f (Get-Random -Maximum 16) })
     $searxngSec = -join ((48..57)+(65..90)+(97..122) | Get-Random -Count 32 | %{[char]$_})
+    $apiKey    = -join (1..32 | %{ '{0:x}' -f (Get-Random -Maximum 16) })
 
     # Write Hermes .env
     @"
@@ -361,6 +386,7 @@ display:
     # Write stack .env for docker-compose
     @"
 MNEMOSYNE_MCP_TOKEN=$mcpTok
+API_SERVER_KEY=$apiKey
 HERMES_API_PORT=8642
 HERMES_DASHBOARD_PORT=9119
 SEARXNG_HOST=127.0.0.1
@@ -391,6 +417,7 @@ Dashboard: http://localhost:9119
   Password: $dashPass
 
 Mnemosyne MCP Token: $mcpTok
+API Server Key: $apiKey
 SearXNG Secret: $searxngSec
 $Provider API Key: $($ApiKey.Substring(0,[Math]::Min(6,$ApiKey.Length)))...
 
@@ -413,7 +440,18 @@ else {
     try {
         # Clean up any previous containers (both old standalone and compose)
         docker compose down --remove-orphans 2>&1 | Out-Null
-        docker rm -f hermes searxng-core searxng-valkey mnemosyne 2>&1 | Out-Null
+        # Только legacy-контейнеры старого standalone-сетапа (без label compose-
+        # проекта); одноимённые контейнеры чужих compose-проектов не трогаем.
+        # Фильтр label!= в docker ps не поддерживается (invalid filter 'label!'),
+        # а вложенные кавычки в --format PS 5.1 передаёт с искажением, поэтому
+        # label'ы читаем range-шаблоном без кавычек и проверяем клиентски.
+        foreach ($n in @("hermes","searxng-core","searxng-valkey","mnemosyne")) {
+            $ids = @(docker ps -aq --filter "name=^$n$")
+            foreach ($id in $ids) {
+                $labels = ((docker inspect $id --format '{{range $k,$v := .Config.Labels}}{{$k}};{{end}}' 2>$null) -join '')
+                if ($labels -notmatch 'com\.docker\.compose\.project') { docker rm -f $id 2>&1 | Out-Null }
+            }
+        }
 
         Invoke-Retry -Script {
             docker compose build mnemosyne 2>&1 | Out-Null
@@ -454,8 +492,23 @@ else {
         if ($LASTEXITCODE -ne 0) { throw "pip install failed" }
     } -Max 3 -Delay 8 -Desc "Install mnemosyne-hermes"
 
-    docker exec hermes bash -c "cp -r /opt/hermes/.venv/lib/python3.13/site-packages/mnemosyne_hermes/* /opt/data/plugins/mnemosyne/" 2>&1 | Out-Null
-    docker exec hermes hermes config set memory.provider mnemosyne 2>&1 | Out-Null
+    # Путь к site-packages ищем динамически (в образе может смениться версия Python).
+    # Скрипт передаём через stdin (docker exec -i): вложенные `"` в аргументе
+    # bash -c PS 5.1 передаёт нативным командам с искажением (команда падает).
+    Invoke-Retry -Script {
+        @'
+SRC=$(find /opt/hermes/.venv -type d -name mnemosyne_hermes 2>/dev/null | head -1)
+mkdir -p /opt/data/plugins/mnemosyne
+cp -r "$SRC/." /opt/data/plugins/mnemosyne/
+test -n "$(ls -A /opt/data/plugins/mnemosyne)"
+'@ | docker exec -i hermes bash -s 2>&1 | Out-Null
+        if ($LASTEXITCODE -ne 0) { throw "plugin copy failed" }
+    } -Max 3 -Delay 5 -Desc "Copy mnemosyne_hermes to plugins"
+
+    Invoke-Retry -Script {
+        docker exec hermes hermes config set memory.provider mnemosyne 2>&1 | Out-Null
+        if ($LASTEXITCODE -ne 0) { throw "config set failed" }
+    } -Max 3 -Delay 5 -Desc "Set memory.provider=mnemosyne"
 
     docker restart hermes 2>&1 | Out-Null
     Start-Sleep 8
@@ -475,7 +528,7 @@ else {
 
     # Hermes API (retry — gateway may still be initializing)
     try {
-        $usr = "admin"; $pw = $dashPass
+        $usr = "admin"; $pw = Get-DashPass
         $b64 = [Convert]::ToBase64String([Text.Encoding]::ASCII.GetBytes("$usr`:$pw"))
         $r = $null
         for ($i=1; $i -le 5; $i++) {
@@ -547,18 +600,8 @@ else {
 # SUMMARY
 # ═══════════════════════════════════════════
 # Recover secrets from file if steps were skipped (checkpoint/resume)
-if (-not $dashPass -or -not $dotHermes) {
-    $dotHermes = "$env:USERPROFILE\.hermes"
-    # Try credentials.txt first, then fall back to .env
-    if (Test-Path "$InstallDir\credentials.txt") {
-        $credContent = Get-Content "$InstallDir\credentials.txt" -Raw
-        if ($credContent -match 'Password: (\S+)') { $dashPass = $Matches[1] }
-    }
-    if (-not $dashPass -and (Test-Path "$dotHermes\.env")) {
-        $envContent = Get-Content "$dotHermes\.env" -Raw
-        if ($envContent -match 'DASHBOARD_BASIC_AUTH_PASSWORD=(\S+)') { $dashPass = $Matches[1] }
-    }
-}
+$dotHermes = "$env:USERPROFILE\.hermes"
+$dashPass  = Get-DashPass
 
 # Ports for the copy-paste links — read from stack .env (set in step 2),
 # fall back to compose defaults.

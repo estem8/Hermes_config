@@ -75,7 +75,7 @@ hermes-stack/
 ├── Dockerfile.mnemosyne     # Mnemosyne image
 ├── searxng-settings.yml    # SearXNG config (secret placeholder → real value at setup)
 ├── specs/                   # SDD-спецификации + verify-specs.ps1
-├── .env                     # Stack env vars (MCP_TOKEN, ports) — NOT in git
+├── .env                     # Stack env vars (MCP_TOKEN, API_SERVER_KEY, ports) — NOT in git
 ├── .env.searxng            # SearXNG env — NOT in git
 ├── .gitignore
 ├── .gitattributes
@@ -119,8 +119,9 @@ Your agent has:
 ```powershell
 cd $env:USERPROFILE\hermes-stack
 
-# 1. Pull latest images (hermes, searxng, valkey) and recreate containers
+# 1. Pull latest images and rebuild the local Mnemosyne image
 docker compose pull
+docker compose build mnemosyne
 docker compose up -d
 
 # 2. Update Hermes inside the container (self-updater)
@@ -141,6 +142,6 @@ powershell -ExecutionPolicy Bypass -File setup.ps1 -ResetState -ApiKey "sk-..."
 | Symptom | Fix |
 |---------|-----|
 | Script stuck at step 3 ("compose up failed") | Ensure Docker Desktop is running, then re-run — checkpoints resume |
-| `SearXNG -- HTTP 000` in verify step | Check `docker network connect searxng_default hermes` after manual container recreation |
+| `SearXNG -- HTTP 000` in verify step | Check `docker compose ps` (all 4 up) and `docker network inspect hermes-net`; re-run `docker compose up -d` |
 | Wrong dashboard password | See `credentials.txt`; reset with `-ResetState` |
 | Port 9119/8642 busy | Change ports in `.env` (`HERMES_DASHBOARD_PORT`, `HERMES_API_PORT`) then `docker compose up -d` |

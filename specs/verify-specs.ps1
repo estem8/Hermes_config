@@ -7,7 +7,7 @@
     Exit code = число проваленных проверок (0 = всё зелёное).
 
     Автоматически гоняет:
-      Compose  : C1-C7, C9
+      Compose  : C1-C7, C9-C10
       Hermes   : H1-H8
       SearXNG  : S1-S4
       Mnemosyne: M1-M5
@@ -120,6 +120,9 @@ Add-Result "C7" ($hermesMounts -match '\.hermes[^;]*=>/opt/data\(rw=True\)') "bi
 $sxMounts = Get-ContainerMounts "searxng-core"
 Add-Result "C9" ($sxMounts -match 'settings\.yml[^;]*\(rw=False\)') "settings.yml mounted ro"
 
+$hermesEnvC = Get-ContainerEnv "hermes"
+Add-Result "C10" (($hermesEnvC -match 'API_SERVER_KEY=[0-9a-f]{32}') -and ($hermesEnvC -notmatch 'change-me')) "API_SERVER_KEY = 32 hex (non-default)"
+
 # ═══════════════════════════════════════════════════════════════════════
 # HERMES  (spec-hermes-service.md)
 # ═══════════════════════════════════════════════════════════════════════
@@ -204,8 +207,9 @@ Add-Result "P2" (Test-Path "$InstallDir\credentials.txt") "credentials.txt exist
 
 $stackEnv = Read-FileRaw "$InstallDir\.env"
 Add-Result "P3" (($stackEnv -match 'MNEMOSYNE_MCP_TOKEN=[^|]+') -and `
+                 ($stackEnv -match 'API_SERVER_KEY=[0-9a-f]{32}') -and `
                  ($stackEnv -match 'HERMES_API_PORT=8642') -and `
-                 ($stackEnv -match 'HERMES_DASHBOARD_PORT=9119')) "stack .env: MCP token + ports"
+                 ($stackEnv -match 'HERMES_DASHBOARD_PORT=9119')) "stack .env: MCP token + API key + ports"
 
 $sxEnv = Read-FileRaw "$InstallDir\.env.searxng"
 Add-Result "P4" (($sxEnv -match 'SEARXNG_HOST=127\.0\.0\.1') -and ($sxEnv -match 'SEARXNG_PORT=8080')) ".env.searxng loopback"

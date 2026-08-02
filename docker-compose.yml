@@ -18,7 +18,7 @@ services:
       - HERMES_DASHBOARD=1
       - API_SERVER_ENABLED=true
       - API_SERVER_HOST=0.0.0.0
-      - API_SERVER_KEY=${API_SERVER_KEY:-change-me-32-hex-chars}
+      - API_SERVER_KEY=${API_SERVER_KEY:?API_SERVER_KEY missing in ./.env -- run setup.ps1}
     networks:
       - hermes-net
 

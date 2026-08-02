@@ -20,7 +20,7 @@
 |------------|--------|------------|
 | `HERMES_API_PORT` | `8642` | host-порт API Hermes |
 | `HERMES_DASHBOARD_PORT` | `9119` | host-порт Dashboard |
-| `API_SERVER_KEY` | `change-me-32-hex-chars` | ключ API-сервера Hermes (env контейнера) |
+| `API_SERVER_KEY` | (обязателен, из `./.env`; генерирует `setup.ps1`, 32 hex) | ключ API-сервера Hermes (env контейнера); без него `docker compose up` падает с ошибкой |
 | `USERPROFILE` | `C:/Users/user` | bind-mount `~/.hermes` → `/opt/data` |
 | `SEARXNG_HOST` | `127.0.0.1` | host-адрес публикации SearXNG |
 | `SEARXNG_PORT` | `8080` | host-порт SearXNG |
@@ -44,6 +44,7 @@
 **Then** команда контейнера — `["gateway", "run"]`
 **And** конфиг смонтирован bind-mount'ом `~/.hermes` → `/opt/data` (без volume'а — иначе пустой конфиг)
 **And** на host опубликованы `8642` (API) и `9119` (Dashboard) на `0.0.0.0`
+**And** контейнер получает `API_SERVER_KEY` из `./.env` (32 hex, генерируется `setup.ps1`; известного дефолтного ключа нет)
 
 ### SCN-COMPOSE-03: SearXNG доступен только с loopback
 **When** контейнер `searxng-core` запущен
@@ -74,6 +75,7 @@
 | C6 | Cmd hermes содержит `gateway run` | `docker inspect hermes --format '{{json .Config.Cmd}}'` |
 | C7 | Bind-mount `~/.hermes` → `/opt/data` (rw) | `docker inspect hermes --format '{{range .Mounts}}{{.Source}}=>{{.Destination}}(rw={{.RW}}) {{end}}'` |
 | C9 | settings.yml смонтирован read-only | `docker inspect searxng-core --format '{{range .Mounts}}...{{end}}'` |
+| C10 | Контейнер hermes получает `API_SERVER_KEY` = 32 hex (не дефолт `change-me`) | `docker inspect hermes --format '{{range .Config.Env}}...{{end}}'` |
 
 ## 5. Верификация
 
@@ -81,4 +83,4 @@
 powershell -ExecutionPolicy Bypass -File specs/verify-specs.ps1
 ```
 
-Все AC этого спека исполняются верификатором автоматически (ID C1–C7, C9).
+Все AC этого спека исполняются верификатором автоматически (ID C1–C7, C9, C10).
