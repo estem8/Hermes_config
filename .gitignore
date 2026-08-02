@@ -8,6 +8,9 @@ credentials.txt
 # Checkpoint state (auto-generated)
 .hermes-stack-state.json
 
+# Desktop app logs (runtime state, dumped into the stack dir)
+.hermes/
+
 # OS files
 Thumbs.db
 Desktop.ini
