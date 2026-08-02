@@ -196,23 +196,37 @@ function Show-StatusPanel {
 }
 
 function Show-MainMenu {
-    # Returns: "install" | "update" | "logs" | "exit"
+    # Returns: "install" | "update" | "status" | "logs" | "start" | "restart" | "down" | "stats" | "exit"
     while ($true) {
         Clear-Host
         Write-Host "  Hermes Agent Stack" -ForegroundColor Cyan
         Show-StatusPanel
         Write-Host "  Menu:" -ForegroundColor Yellow
+        Write-Host "    -- Setup --"
         Write-Host "    [1] Install"
         Write-Host "    [2] Update"
-        Write-Host "    [3] Logs"
-        Write-Host "    [4] Exit"
+        Write-Host ""
+        Write-Host "    -- Managing the Stack --"
+        Write-Host "    [3] Status        docker compose ps"
+        Write-Host "    [4] Logs          docker compose logs -f"
+        Write-Host "    [5] Start         docker compose up -d"
+        Write-Host "    [6] Restart       docker compose restart"
+        Write-Host "    [7] Stop          docker compose down"
+        Write-Host "    [8] Stats         docker stats (live)"
+        Write-Host ""
+        Write-Host "    [0] Exit"
         Write-Host ""
         $choice = Read-Host "  Select"
         switch ($choice) {
             "1" { return "install" }
             "2" { return "update" }
-            "3" { return "logs" }
-            "4" { return "exit" }
+            "3" { return "status" }
+            "4" { return "logs" }
+            "5" { return "start" }
+            "6" { return "restart" }
+            "7" { return "down" }
+            "8" { return "stats" }
+            "0" { return "exit" }
             default { Write-WARN "Invalid choice: $choice" }
         }
     }
@@ -240,10 +254,23 @@ function Invoke-Update {
     } finally { Pop-Location }
 }
 
-function Invoke-Logs {
-    Write-Step "LOGS: docker compose logs -f (Ctrl+C to exit)"
+function Invoke-Compose([string]$ComposeArgs, [string]$Desc) {
+    Write-Step "$Desc`: docker compose $ComposeArgs"
     Push-Location $InstallDir
-    try { docker compose logs -f } finally { Pop-Location }
+    try {
+        docker compose $ComposeArgs.Split(" ")
+        if ($LASTEXITCODE -ne 0) { Write-WARN "docker compose $ComposeArgs failed (exit code $LASTEXITCODE)" }
+    } finally { Pop-Location }
+}
+
+function Invoke-Stats {
+    Write-Step "STATS: docker stats (Ctrl+C to exit)"
+    docker stats
+}
+
+function Pause-Menu {
+    Write-Host ""
+    Read-Host "Press Enter to return to the menu"
 }
 
 # ═══════════════════════════════════════════
@@ -281,12 +308,20 @@ if ($DryRun) {
 # MAIN MENU
 # ═══════════════════════════════════════════
 if (-not $DryRun -and -not $Install) {
-    $menuAction = Show-MainMenu
-    switch ($menuAction) {
-        "update" { Invoke-Update; Write-Host ""; Read-Host "Press Enter to return"; exit 0 }
-        "logs"   { Invoke-Logs;   exit 0 }
-        "exit"   { Write-Host "Bye!"; exit 0 }
-        "install" { }  # fall through to the setup steps
+    $stayInMenu = $true
+    while ($stayInMenu) {
+        $menuAction = Show-MainMenu
+        switch ($menuAction) {
+            "update"   { Invoke-Update;   Pause-Menu }
+            "status"   { Invoke-Compose "ps"      "STATUS";   Pause-Menu }
+            "logs"     { Invoke-Compose "logs -f" "LOGS" }
+            "start"    { Invoke-Compose "up -d"   "START";    Pause-Menu }
+            "restart"  { Invoke-Compose "restart" "RESTART";  Pause-Menu }
+            "down"     { Invoke-Compose "down"    "STOP";     Pause-Menu }
+            "stats"    { Invoke-Stats }
+            "exit"     { Write-Host "Bye!"; exit 0 }
+            "install"  { $stayInMenu = $false }  # fall through to the setup steps
+        }
     }
 }
 

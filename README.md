@@ -27,10 +27,9 @@ powershell -ExecutionPolicy Bypass -File setup.ps1 -Install -ResetState -ApiKey 
 ```
 
 > **Interactive mode:** run `setup.ps1` without arguments to open a menu. A live status panel on top shows Docker / API / SearXNG / Mnemosyne as `[OK]`/`[FAIL]`, then choose:
-> - **1. Install** — run the 6-step setup (status bar `[####------] 4/6`)
-> - **2. Update** — `docker compose pull` + `hermes update` + restart
-> - **3. Logs** — follow `docker compose logs -f`
-> - **4. Exit**
+> - **Setup:** **1. Install** — run the 6-step setup (status bar `[####------] 4/6`) · **2. Update** — `docker compose pull` + `hermes update` + restart
+> - **Managing the Stack:** **3. Status** (`docker compose ps`) · **4. Logs** (`logs -f`) · **5. Start** (`up -d`) · **6. Restart** · **7. Stop** (`down`) · **8. Stats** (`docker stats`)
+> - **0. Exit**
 >
 > The final summary prints copy-paste links (dashboard, API, SearXNG, Mnemosyne) and Desktop connection settings.
 
@@ -86,14 +85,31 @@ hermes-stack/
 
 ## Managing the Stack
 
+Most commands below are also exposed in the interactive menu (`setup.ps1` → **Managing the Stack**).
+
 ```powershell
 cd $env:USERPROFILE\hermes-stack
 
-docker compose ps          # status
-docker compose logs -f     # follow logs
-docker compose restart     # restart all
-docker compose down        # full stop
+docker compose ps           # status
+docker compose logs -f      # follow logs
+docker compose restart      # restart all
+docker compose down         # full stop (named volumes are kept)
+docker compose up -d        # start all (e.g. after `down`)
 ```
+
+More useful commands:
+
+```powershell
+docker compose logs hermes          # logs of one service: hermes | searxng-core | searxng-valkey | mnemosyne
+docker compose logs --tail=100      # last 100 lines without following
+docker compose exec hermes sh       # interactive shell inside the Hermes container
+docker compose build mnemosyne      # rebuild the local Mnemosyne image
+docker stats                        # live CPU / memory usage (Ctrl+C to exit)
+docker system df                    # disk usage of images / containers / volumes
+docker system prune                 # clean up unused Docker data (read the prompt before confirming)
+```
+
+> `docker compose down` keeps your data: named volumes (`searxng-cache`, `valkey-data`, `mnemosyne-data`) survive. Use `docker compose down -v` only if you really want to wipe them.
 
 ## Connecting Hermes Desktop
 

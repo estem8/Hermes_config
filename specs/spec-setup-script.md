@@ -42,7 +42,7 @@ Docker, генерация секретов, запись конфигов Herme
 ### SCN-SETUP-01: Без аргументов — интерактивное меню
 **Given** скрипт запущен без параметров
 **Then** поверх меню рисуется статус-панель: Docker (`docker info`), API (TCP 9119), Search (TCP 8080), Memory (TCP 8081) как `[OK]`/`[FAIL]`
-**And** пункты меню: 1 Install, 2 Update, 3 Logs, 4 Exit
+**And** пункты меню: Setup — 1 Install, 2 Update; Managing the Stack — 3 Status (`docker compose ps`), 4 Logs (`logs -f`), 5 Start (`up -d`), 6 Restart, 7 Stop (`down`), 8 Stats (`docker stats`); 0 Exit
 
 ### SCN-SETUP-02: `-Install -Provider <p> -ApiKey <k>` — шесть шагов
 **When** скрипт запущен с `-Install`
@@ -87,6 +87,12 @@ Docker, генерация секретов, запись конфигов Herme
 **When** выбрано «2. Update» (или `Invoke-Update`)
 **Then** `docker compose pull` (retry 2), `docker compose build mnemosyne` (retry 2), `docker compose up -d` (retry 3×8s), `docker exec hermes hermes update`, `docker restart hermes`
 
+### SCN-SETUP-10: Меню → Managing the Stack
+**When** выбран пункт «Status / Logs / Start / Restart / Stop / Stats»
+**Then** в `$InstallDir` выполняется соответствующая команда: `docker compose ps` (3), `docker compose logs -f` (4), `docker compose up -d` (5), `docker compose restart` (6), `docker compose down` (7), `docker stats` (8)
+**And** после завершения команды (кроме блокирующих 4 Logs и 8 Stats — выход по Ctrl+C) меню показывается снова; при ненулевом exit code печатается `WARN`
+**And** «1 Install» завершает цикл меню и переходит к шагам установки, «0 Exit» завершает скрипт
+
 ### SCN-SETUP-09: Итоговая сводка
 **When** установка завершена (или шаги пропущены)
 **Then** пароль восстанавливается из `credentials.txt` (fallback: `~/.hermes/.env`), порты читаются из `./.env` (fallback: дефолты)
@@ -102,7 +108,7 @@ Docker, генерация секретов, запись конфигов Herme
 | P4 | `./.env.searxng` содержит host/port loopback | чтение файла | auto |
 | P5 | `setup.ps1` парсится без синтаксических ошибок | `Parser::ParseFile` | auto |
 | P6 | `-DryRun` не создаёт/не меняет файлы и не дёргает docker | ручной прогон | manual |
-| P7 | Без аргументов показываются статус-панель и пункты 1–4 | ручной прогон | manual |
+| P7 | Без аргументов показываются статус-панель и пункты меню (Setup 1–2, Managing the Stack 3–8, Exit 0) | ручной прогон | manual |
 
 ## 5. Верификация
 
