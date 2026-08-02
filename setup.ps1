@@ -1,4 +1,4 @@
-<#
+﻿<#
 .SYNOPSIS
     Hermes Agent Stack v2 -- automated setup for Windows 11
     Docker Desktop + Hermes Gateway + SearXNG + Mnemosyne + Hermes Desktop
@@ -349,7 +349,7 @@ else {
     # посимвольно: иначе длина упирается в размер алфавита (16) вместо 64/32.
     $mcpTok    = -join (1..64 | %{ '{0:x}' -f (Get-Random -Maximum 16) })
     $searxngSec = -join ((48..57)+(65..90)+(97..122) | Get-Random -Count 32 | %{[char]$_})
-    $apiKey    = -join (1..32 | %{ '{0:x}' -f (Get-Random -Maximum 16) })
+    $serverKey = -join (1..32 | %{ '{0:x}' -f (Get-Random -Maximum 16) })
 
     # Write Hermes .env
     @"
@@ -386,7 +386,7 @@ display:
     # Write stack .env for docker-compose
     @"
 MNEMOSYNE_MCP_TOKEN=$mcpTok
-API_SERVER_KEY=$apiKey
+API_SERVER_KEY=$serverKey
 HERMES_API_PORT=8642
 HERMES_DASHBOARD_PORT=9119
 SEARXNG_HOST=127.0.0.1
@@ -417,7 +417,7 @@ Dashboard: http://localhost:9119
   Password: $dashPass
 
 Mnemosyne MCP Token: $mcpTok
-API Server Key: $apiKey
+API Server Key: $serverKey
 SearXNG Secret: $searxngSec
 $Provider API Key: $($ApiKey.Substring(0,[Math]::Min(6,$ApiKey.Length)))...
 
@@ -584,14 +584,37 @@ else {
     } else { Write-OK "Desktop already installed" }
 
     # Connection config
+    # NOTE: authMode must be "oauth" (not "basic"/"token"): the Desktop app
+    # normalizes any non-"oauth" mode to token-auth, and token-auth cannot pass
+    # the gateway's WebSocket auth gate (0.0.0.0 bind → ?ticket=/?internal= only).
+    # With "oauth" the user signs in once via Settings → Gateway → Sign in using
+    # the dashboard credentials below.
     $connDir = "$env:APPDATA\hermes"
     New-Item -ItemType Directory -Force -Path $connDir | Out-Null
     @{
         mode = "remote"
-        remote = @{ url = "http://localhost:9119"; authMode = "basic" }
+        remote = @{ url = "http://localhost:9119"; authMode = "oauth" }
         profiles = @{}
     } | ConvertTo-Json -Depth 3 | Write-File "$connDir\connection.json"
-    Write-OK "Connection → http://localhost:9119"
+    Write-OK "Connection → http://localhost:9119 (oauth) "
+
+    # Verify dashboard login works (validates the generated password against
+    # the gateway's basic provider). Fail-fast so the user learns about a bad
+    # password BEFORE they get a cryptic "session expired" in Desktop.
+    $loginOk = $false
+    $dashUser = "admin"
+    $dashPassCheck = Get-DashPass
+    try {
+        $loginBody = @{ provider = "basic"; username = $dashUser; password = $dashPassCheck; next = "/" } | ConvertTo-Json
+        $loginResp = Invoke-RestMethod -Uri "http://localhost:9119/auth/password-login" -Method Post -ContentType "application/json" -Body $loginBody -TimeoutSec 8
+        $loginOk = ($loginResp.ok -eq $true)
+    } catch { $loginOk = $false }
+    if ($loginOk) {
+        Write-OK "Gateway login verified (admin / <password from credentials.txt>)"
+    } else {
+        Write-Host "  WARN  Gateway login check failed — Desktop Sign in will fail too." -ForegroundColor Yellow
+        Write-Host "        Fix: check HERMES_DASHBOARD_BASIC_AUTH_PASSWORD / credentials.txt" -ForegroundColor Yellow
+    }
 
     Set-State $step
 }
@@ -643,6 +666,8 @@ Write-Host "  Settings -> Gateway -> Remote gateway ->" -ForegroundColor White
 Write-Host "  URL:  $dashUrl" -ForegroundColor White
 Write-Host "  User: admin" -ForegroundColor White
 Write-Host "  Pass: $dashPass" -ForegroundColor White
+Write-Host "  Then click 'Sign in' (ONE time) -- Desktop stores the session." -ForegroundColor Green
+Write-Host "  If you see 'session expired', just Sign in again with these credentials." -ForegroundColor Green
 Write-Host ""
 Write-Host "  -- Commands --" -ForegroundColor Yellow
 Write-Host "  Launch Desktop: Start-Process `"$env:LOCALAPPDATA\hermes\hermes-agent\apps\desktop\Hermes Agent.exe`""
