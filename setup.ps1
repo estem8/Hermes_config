@@ -429,13 +429,25 @@ if (-not $DryRun -and -not $Install) {
 # ═══════════════════════════════════════════
 # COMPONENT-SELECTION GUARD
 # ═══════════════════════════════════════════
-# If a previous install used a different component set, the checkpointed steps
-# would silently skip and nothing would change — tell the user to re-apply.
+# If the requested selection differs from what is installed, the checkpointed
+# steps would silently skip and nothing would change. Re-apply automatically:
+# reset the component-dependent checkpoints (steps 2-6); step 2 reuses existing
+# secrets, so passwords/tokens are NOT rotated by a selection change.
 if (-not $ResetState) {
     $s = Get-State
-    if ($s.components -and ($s.components -ne ($script:SelectedComponents -join ","))) {
-        Write-WARN "Installed components ($($s.components)) differ from requested ($($script:SelectedComponents -join ', '))"
-        Write-WARN "Re-apply with: setup.ps1 -Install -ResetState -Components '$($script:SelectedComponents -join ',')'"
+    $installedComps = $null
+    if ($s.components) {
+        $installedComps = $s.components
+    } elseif ($s.completed -and $s.completed.Count -gt 0) {
+        $installedComps = "hermes,searxng,mnemosyne"  # legacy full-stack install (no components recorded)
+    }
+    if ($installedComps -and ($installedComps -ne ($script:SelectedComponents -join ","))) {
+        Write-WARN "Installed components ($installedComps) differ from requested ($($script:SelectedComponents -join ', '))"
+        Write-WARN "Re-applying steps 2-6 (configs, containers, verification) -- existing secrets are reused"
+        foreach ($st in @("directories","containers","plugin","verify","desktop")) {
+            $s.completed = @($s.completed | Where-Object { $_ -ne $st })
+        }
+        $s | ConvertTo-Json -Depth 3 | ForEach-Object { Write-File $StateFile $_ }
     }
 }
 
@@ -493,14 +505,33 @@ else {
     }
     Write-OK "Directories created"
 
-    # Generate secrets
-    $dashPass  = -join ((48..57)+(65..90)+(97..122) | Get-Random -Count 16 | %{[char]$_})
-    $dashSec   = -join ((48..57)+(65..90)+(97..122) | Get-Random -Count 44 | %{[char]$_}) + "=="
+    # Secrets: reuse existing ones on re-runs / selection re-applies (no rotation),
+    # generate only what is missing.
+    $dashPass = $null; $dashSec = $null; $mcpTok = $null; $searxngSec = $null; $serverKey = $null
+    if (Test-Path "$dotHermes\.env") {
+        $envFile = Get-Content "$dotHermes\.env" -Raw
+        if ($envFile -match 'HERMES_DASHBOARD_BASIC_AUTH_PASSWORD=(\S+)') { $dashPass = $Matches[1] }
+        if ($envFile -match 'HERMES_DASHBOARD_BASIC_AUTH_SECRET=(\S+)')   { $dashSec  = $Matches[1] }
+        if (-not $ApiKey -and $envFile -match ([regex]::Escape($cfg.envKey) + '=(\S+)')) { $ApiKey = $Matches[1] }
+    }
+    if (Test-Path "$InstallDir\.env") {
+        $envFile = Get-Content "$InstallDir\.env" -Raw
+        if ($envFile -match 'MNEMOSYNE_MCP_TOKEN=(\S+)') { $mcpTok = $Matches[1] }
+        if ($envFile -match 'API_SERVER_KEY=(\S+)')      { $serverKey = $Matches[1] }
+    }
+    if (Test-Path "$InstallDir\searxng-settings.yml") {
+        $sxFile = Get-Content "$InstallDir\searxng-settings.yml" -Raw
+        # only a real (>=20 alnum chars) secret matches; the placeholder contains '_' and '$'
+        if ($sxFile -match 'secret_key:\s*"?([A-Za-z0-9]{20,})"?') { $searxngSec = $Matches[1] }
+    }
+    # Generate only the missing secrets
+    $dashPass   = if ($dashPass)   { $dashPass }   else { -join ((48..57)+(65..90)+(97..122) | Get-Random -Count 16 | %{[char]$_}) }
+    $dashSec    = if ($dashSec)    { $dashSec }    else { -join ((48..57)+(65..90)+(97..122) | Get-Random -Count 44 | %{[char]$_}) + "==" }
     # NOTE: Get-Random -Count не повторяет элементы, поэтому hex-строки генерим
     # посимвольно: иначе длина упирается в размер алфавита (16) вместо 64/32.
-    $mcpTok    = -join (1..64 | %{ '{0:x}' -f (Get-Random -Maximum 16) })
-    $searxngSec = -join ((48..57)+(65..90)+(97..122) | Get-Random -Count 32 | %{[char]$_})
-    $serverKey = -join (1..32 | %{ '{0:x}' -f (Get-Random -Maximum 16) })
+    $mcpTok     = if ($mcpTok)     { $mcpTok }     else { -join (1..64 | %{ '{0:x}' -f (Get-Random -Maximum 16) }) }
+    $searxngSec = if ($searxngSec) { $searxngSec } else { -join ((48..57)+(65..90)+(97..122) | Get-Random -Count 32 | %{[char]$_}) }
+    $serverKey  = if ($serverKey)  { $serverKey }  else { -join (1..32 | %{ '{0:x}' -f (Get-Random -Maximum 16) }) }
 
     # Write Hermes .env (only with the Hermes Gateway component)
     if ($script:SelectedComponents -contains "hermes") {

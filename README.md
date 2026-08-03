@@ -90,7 +90,7 @@ The selection is persisted in `./.env`:
 
 > SearXNG/Mnemosyne start only when their profile is enabled (`COMPOSE_PROFILES`); `hermes` has no profile and is always part of `docker compose up -d`. Requires Docker Compose v2.20+ (ships with current Docker Desktop).
 >
-> Changing the selection after an install requires a clean rebuild (checkpointed steps would otherwise skip): `setup.ps1 -Install -ResetState -Components "<csv>"`.
+> **Changing the selection after an install re-applies automatically:** on the next run the setup detects the mismatch (from `STACK_COMPONENTS` / state), resets the component-dependent steps (2–6) and re-runs them with the new selection — existing secrets are **reused**, so dashboard password / MCP token / API keys are not rotated. Example: uncheck SearXNG in the menu → Enter → SearXNG containers are removed and `web.search_backend` is dropped from `config.yaml`.
 
 ## Features
 

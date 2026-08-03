@@ -103,7 +103,8 @@ Docker, генерация секретов, запись конфигов Herme
 **And** шаг 2 пишет в `./.env` строки `COMPOSE_PROFILES=<searxng,mnemosyne>` (только выбранные не-hermes профили) и `STACK_COMPONENTS=<csv>`; в `~/.hermes/.env`/`config.yaml`/`credentials.txt` секции только для выбранных компонентов (`SEARXNG_URL`/`web.search_backend` только при searxng; `memory.provider` только при mnemosyne; `MNEMOSYNE_MCP_TOKEN` только при mnemosyne; `API_SERVER_KEY`/dashboard/Desktop — всегда, т.к. hermes всегда)
 **And** шаг 3: `build mnemosyne` только при mnemosyne; `up -d` стартует только выбранные (через `COMPOSE_PROFILES`; `hermes` без профиля — всегда); лишние контейнеры проекта (label `com.docker.compose.project=hermes-stack`) вне выбранного набора удаляются; проверка «running» — только по ожидаемым контейнерам
 **And** шаг 4 (плагин) — только при mnemosyne (hermes есть всегда); шаг 5 проверяет только выбранные компоненты; шаг 6 (Desktop) — всегда
-**And** при расхождении выбора с сохранённым в state (`components`) печатается `WARN` с командой `setup.ps1 -Install -ResetState -Components '<csv>'`
+**And** при расхождении выбора с установленным (state `components`; для legacy-установок без `components` считается `hermes,searxng,mnemosyne`) печатается `WARN` и сбрасываются чекпоинты шагов 2–6 (`directories`, `containers`, `plugin`, `verify`, `desktop`) — шаги перевыполняются с новой выборкой
+**And** шаг 2 переиспользует существующие секреты (`~/.hermes/.env`, `./.env`, `searxng-settings.yml`), генерирует только недостающие — пароли/токены при смене выборки не ротируются; `DEEPSEEK_API_KEY` при отсутствии `-ApiKey` восстанавливается из `~/.hermes/.env`
 **And** в конце выбранный набор сохраняется в state как `components`
 
 ### SCN-SETUP-09: Итоговая сводка
