@@ -429,21 +429,30 @@ if (-not $DryRun -and -not $Install) {
 # ═══════════════════════════════════════════
 # COMPONENT-SELECTION GUARD
 # ═══════════════════════════════════════════
-# If the requested selection differs from what is installed, the checkpointed
-# steps would silently skip and nothing would change. Re-apply automatically:
-# reset the component-dependent checkpoints (steps 2-6); step 2 reuses existing
-# secrets, so passwords/tokens are NOT rotated by a selection change.
+# The actual installed set = STACK_COMPONENTS in $InstallDir\.env (written by an
+# applying step 2). Do NOT trust state.components: a run whose steps were all
+# skipped still writes the requested-but-NOT-applied selection there (stale).
+# On a mismatch, re-apply automatically: reset the component-dependent
+# checkpoints (steps 2-6); step 2 reuses existing secrets, so passwords/tokens
+# are NOT rotated by a selection change.
 if (-not $ResetState) {
-    $s = Get-State
     $installedComps = $null
-    if ($s.components) {
-        $installedComps = $s.components
-    } elseif ($s.completed -and $s.completed.Count -gt 0) {
-        $installedComps = "hermes,searxng,mnemosyne"  # legacy full-stack install (no components recorded)
+    if (Test-Path "$InstallDir\.env") {
+        $stackEnv = Get-Content "$InstallDir\.env" -Raw
+        if ($stackEnv -match 'STACK_COMPONENTS=([^\r\n]+)') {
+            $installedComps = (ConvertTo-ComponentArray $Matches[1] | Sort-Object -Unique) -join ","
+        }
     }
-    if ($installedComps -and ($installedComps -ne ($script:SelectedComponents -join ","))) {
+    if (-not $installedComps) {
+        # No STACK_COMPONENTS recorded — legacy full-stack install (state has completed steps)
+        $s = Get-State
+        if ($s.completed -and $s.completed.Count -gt 0) { $installedComps = "hermes,mnemosyne,searxng" }
+    }
+    $requestedNorm = ($script:SelectedComponents | Sort-Object -Unique) -join ","
+    if ($installedComps -and ($installedComps -ne $requestedNorm)) {
         Write-WARN "Installed components ($installedComps) differ from requested ($($script:SelectedComponents -join ', '))"
         Write-WARN "Re-applying steps 2-6 (configs, containers, verification) -- existing secrets are reused"
+        $s = Get-State
         foreach ($st in @("directories","containers","plugin","verify","desktop")) {
             $s.completed = @($s.completed | Where-Object { $_ -ne $st })
         }
