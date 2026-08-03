@@ -21,7 +21,7 @@
 | `HERMES_API_PORT` | `8642` | host-порт API Hermes |
 | `HERMES_DASHBOARD_PORT` | `9119` | host-порт Dashboard |
 | `API_SERVER_KEY` | (обязателен, из `./.env`; генерирует `setup.ps1`, 32 hex) | ключ API-сервера Hermes (env контейнера); без него `docker compose up` падает с ошибкой |
-| `USERPROFILE` | `C:/Users/user` | bind-mount `~/.hermes` → `/opt/data` |
+| `USERPROFILE` | (обязателен, из окружения; `:?` — без него compose падает с ошибкой) | bind-mount `~/.hermes` → `/opt/data` |
 | `SEARXNG_HOST` | `127.0.0.1` | host-адрес публикации SearXNG |
 | `SEARXNG_PORT` | `8080` | host-порт SearXNG |
 | `MNEMOSYNE_PORT` | `127.0.0.1:8081` | host-адрес:порт Mnemosyne |
