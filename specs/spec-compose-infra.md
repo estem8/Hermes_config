@@ -26,8 +26,10 @@
 | `SEARXNG_PORT` | `8080` | host-порт SearXNG |
 | `MNEMOSYNE_PORT` | `127.0.0.1:8081` | host-адрес:порт Mnemosyne |
 | `MNEMOSYNE_MCP_TOKEN` | (обязателен, из `./.env`) | токен MCP-аутентификации |
+| `COMPOSE_PROFILES` | (из `./.env`, генерирует `setup.ps1`) | профили, включаемые при `up`/`ps`/`logs`: `searxng`, `mnemosyne`; `hermes` всегда активен |
+| `STACK_COMPONENTS` | (из `./.env`, генерирует `setup.ps1`) | выбранные компоненты CSV (`hermes,searxng,mnemosyne`) — для чтения выборки скриптом/меню |
 
-Сервисы: `hermes`, `searxng-core`, `searxng-valkey`, `mnemosyne`.
+Сервисы: `hermes` (без профиля — всегда), `searxng-core`/`searxng-valkey` (профиль `searxng`), `mnemosyne` (профиль `mnemosyne`).
 Сеть: `hermes-net` (bridge). Volume'ы: `searxng-cache`, `valkey-data`, `mnemosyne-data`.
 
 ## 3. Поведенческие сценарии
@@ -63,11 +65,18 @@
 **Then** порт `6379` не публикуется на host
 **And** команда: `valkey-server --save 30 1 --loglevel warning`
 
+### SCN-COMPOSE-06: Профили — выборочный запуск
+**Given** в `./.env` задан `COMPOSE_PROFILES=<searxng,mnemosyne>` (или пусто)
+**When** `docker compose up -d` завершается успешно
+**Then** стартуют `hermes` + сервисы только включённых профилей (зависит от `COMPOSE_PROFILES`)
+**And** `docker compose ps`/`logs -f`/`restart` видят только активные сервисы
+**And** `docker compose down` останавливает сервисы активных профилей; контейнеры сервисов, профиль которых выключен после старта, могут остаться — `setup.ps1` (шаг 3) удаляет такие «лишние» контейнеры проекта по label `com.docker.compose.project=hermes-stack`
+
 ## 4. Приёмочные критерии
 
 | ID | Критерий | Проверка |
 |----|----------|----------|
-| C1 | Все 4 контейнера в списке `docker ps` | `docker ps --format '{{.Names}}'` |
+| C1 | Все 4 контейнера в списке `docker ps` (референсная установка со всеми компонентами; при выборочной — только выбранные) | `docker ps --format '{{.Names}}'` |
 | C2 | Все 4 в сети `hermes-net` | `docker inspect <name> --format '{{range $k,$v := .NetworkSettings.Networks}}{{$k}} {{end}}'` |
 | C3 | hermes публикует 8642 и 9119 на `0.0.0.0` | `docker port hermes` |
 | C4 | searxng-core публикует только `127.0.0.1:8080` | `docker port searxng-core` |

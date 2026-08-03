@@ -156,10 +156,10 @@ $connOk = $false; $connPath = "$env:APPDATA\hermes\connection.json"
 if (Test-Path $connPath) {
     try {
         $j = Get-Content $connPath -Raw | ConvertFrom-Json
-        $connOk = ($j.mode -eq "remote") -and ($j.remote.url -eq "http://localhost:9119") -and ($j.remote.authMode -eq "basic")
+        $connOk = ($j.mode -eq "remote") -and ($j.remote.url -eq "http://localhost:9119") -and ($j.remote.authMode -eq "oauth")
     } catch {}
 }
-Add-Result "H8" $connOk "connection.json remote -> localhost:9119 (basic)"
+Add-Result "H8" $connOk "connection.json remote -> localhost:9119 (oauth)"
 
 # ═══════════════════════════════════════════════════════════════════════
 # SEARXNG  (spec-searxng-service.md)

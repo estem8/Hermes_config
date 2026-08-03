@@ -63,7 +63,7 @@
 
 ### SCN-HERMES-04: Desktop подключается как remote gateway
 **Given** `%APPDATA%\hermes\connection.json` записан установщиком
-**Then** `mode=remote`, `remote.url=http://localhost:9119`, `remote.authMode=basic`
+**Then** `mode=remote`, `remote.url=http://localhost:9119`, `remote.authMode=oauth` (см. комментарий в шаге 6 `setup.ps1`: не-oauth нормализуется Desktop в token-auth и не проходит WebSocket-аутентификацию)
 **And** Desktop подключается к контейнеру через host-порт 9119
 
 ## 4. Приёмочные критерии
@@ -77,7 +77,7 @@
 | H5 | `~/.hermes/plugins/mnemosyne/` существует (bind-mount) | `Test-Path` |
 | H6 | `GET /api/status` на 9119 с basic auth → 200 + version | `Invoke-RestMethod` |
 | H7 | `hermes memory status` содержит `mnemosyne...active` | `docker exec hermes hermes memory status` |
-| H8 | `connection.json`: mode=remote, url=localhost:9119, authMode=basic | чтение JSON |
+| H8 | `connection.json`: mode=remote, url=localhost:9119, authMode=oauth | чтение JSON |
 
 ## 5. Верификация
 
