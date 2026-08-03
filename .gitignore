@@ -21,3 +21,6 @@ Desktop.ini
 .idea/
 *.swp
 *.swo
+
+# PowerShell module analysis cache (created in the repo dir on some runs)
+Microsoft/
