@@ -242,12 +242,20 @@ function Show-StatusCell([string]$Label, [bool]$Ok) {
     Write-Host ("  {0,-10} {1}" -f $Label, $mark) -NoNewline -ForegroundColor $fg
 }
 
+function Get-StackPort([string]$Regex, [string]$Default) {
+    if (Test-Path "$InstallDir\.env") {
+        $e = Get-Content "$InstallDir\.env" -Raw
+        if ($e -match $Regex) { return $Matches[1] }
+    }
+    return $Default
+}
+
 function Show-StatusPanel {
     Write-Host ""
     Show-StatusCell "Docker"   (Test-Docker)
-    if ($script:SelectedComponents -contains "hermes")    { Show-StatusCell "API"      (Test-TcpPort 9119) }
-    if ($script:SelectedComponents -contains "searxng")   { Show-StatusCell "Search"   (Test-TcpPort 8080) }
-    if ($script:SelectedComponents -contains "mnemosyne") { Show-StatusCell "Memory"   (Test-TcpPort 8081) }
+    if ($script:SelectedComponents -contains "hermes")    { Show-StatusCell "Dash"     (Test-TcpPort ([int](Get-StackPort 'HERMES_DASHBOARD_PORT=(\d+)' 9119))) }
+    if ($script:SelectedComponents -contains "searxng")   { Show-StatusCell "Search"   (Test-TcpPort ([int](Get-StackPort 'SEARXNG_PORT=(\d+)' 8080))) }
+    if ($script:SelectedComponents -contains "mnemosyne") { Show-StatusCell "Memory"   (Test-TcpPort ([int](Get-StackPort 'MNEMOSYNE_PORT=.*?:(\d+)' 8081))) }
     Write-Host ""
     Write-Host ""
 }
@@ -344,11 +352,25 @@ function Invoke-Update {
             docker compose up -d 2>&1 | Out-Null
             if ($LASTEXITCODE -ne 0) { throw "compose up failed" }
         } -Max 3 -Delay 8 -Desc "docker compose up -d"
-        if ($script:SelectedComponents -contains "hermes") {
-            $null = docker exec hermes hermes update 2>&1
-            $null = docker restart hermes 2>&1
+        if ($script:SelectedComponents -contains "mnemosyne") {
+            # Image recreate resets the hermes venv (pip packages are
+            # ephemeral); reinstall the plugin deps so memory keeps working
+            # (the copied plugin dir itself persists via the bind mount).
+            Invoke-Retry -Script {
+                docker exec hermes uv pip install --python /opt/hermes/.venv/bin/python mnemosyne-hermes 2>&1 | Out-Null
+                if ($LASTEXITCODE -ne 0) { throw "pip install failed" }
+            } -Max 3 -Delay 8 -Desc "Reinstall mnemosyne-hermes after update"
         }
-        Write-OK "Update complete"
+        $updateWarn = $false
+        if ($script:SelectedComponents -contains "hermes") {
+            # `hermes update` is intentionally unsupported inside the container
+            # (no git worktree; it exits 1 with instructions to pull the image
+            # instead). The real update IS the `docker compose pull` + `up -d`
+            # above; the restart just applies the fresh image.
+            docker restart hermes 2>&1 | Out-Null
+            if ($LASTEXITCODE -ne 0) { Write-WARN "docker restart hermes failed (exit $LASTEXITCODE)"; $updateWarn = $true }
+        }
+        if ($updateWarn) { Write-WARN "Update finished with warnings" } else { Write-OK "Update complete" }
     } finally { Pop-Location }
 }
 
@@ -390,7 +412,8 @@ if ($DryRun) {
     Write-Host "Model:      $Model"
     Write-Host "Components: $($script:SelectedComponents -join ', ')"
     Write-Host "InstallDir: $InstallDir"
-    Write-Host "API key:    $($ApiKey.Substring(0,[Math]::Min(8,$ApiKey.Length)))..."
+    $keyMask = if ($ApiKey) { "$($ApiKey.Substring(0,[Math]::Min(8,$ApiKey.Length)))..." } else { "(not provided)" }
+    Write-Host "API key:    $keyMask"
     Write-Host ""
     $plan = @("Docker Desktop", "Docker containers: $((Get-ExpectedContainers) -join ', ')")
     if ($script:SelectedComponents -contains "hermes") {
@@ -401,7 +424,11 @@ if ($DryRun) {
     $pi = 1
     foreach ($p in $plan) { Write-Host ("  {0}. {1}" -f $pi, $p); $pi++ }
     Write-Host ""
-    Write-Host "Ports: 8642 (API), 9119 (dashboard), 8080 (search), 8081 (memory)"
+    $dryApi  = Get-StackPort 'HERMES_API_PORT=(\d+)' 8642
+    $dryDash = Get-StackPort 'HERMES_DASHBOARD_PORT=(\d+)' 9119
+    $drySx   = Get-StackPort 'SEARXNG_PORT=(\d+)' 8080
+    $dryMem  = Get-StackPort 'MNEMOSYNE_PORT=.*?:(\d+)' 8081
+    Write-Host "Ports: $dryApi (API), $dryDash (dashboard), $drySx (search), $dryMem (memory)"
     exit 0
 }
 
@@ -533,14 +560,27 @@ else {
         # only a real (>=20 alnum chars) secret matches; the placeholder contains '_' and '$'
         if ($sxFile -match 'secret_key:\s*"?([A-Za-z0-9]{20,})"?') { $searxngSec = $Matches[1] }
     }
+    # Generate secrets with a cryptographically secure RNG (Get-Random is not
+    # suitable for secrets on PS 5.1). Formats match spec SCN-SETUP-06.
+    $secRng = New-Object System.Security.Cryptography.RNGCryptoServiceProvider
+    function New-SecureAlnum([int]$Length) {
+        $bytes = New-Object byte[] $Length
+        $script:secRng.GetBytes($bytes)
+        $chars = (48..57)+(65..90)+(97..122)
+        return -join ($bytes | ForEach-Object { [char]$chars[$_ % $chars.Count] })
+    }
+    function New-SecureHex([int]$Length) {
+        $bytes = New-Object byte[] ([Math]::Ceiling($Length / 2))
+        $script:secRng.GetBytes($bytes)
+        $hex = -join ($bytes | ForEach-Object { $_.ToString("x2") })
+        return $hex.Substring(0, $Length)
+    }
     # Generate only the missing secrets
-    $dashPass   = if ($dashPass)   { $dashPass }   else { -join ((48..57)+(65..90)+(97..122) | Get-Random -Count 16 | %{[char]$_}) }
-    $dashSec    = if ($dashSec)    { $dashSec }    else { -join ((48..57)+(65..90)+(97..122) | Get-Random -Count 44 | %{[char]$_}) + "==" }
-    # NOTE: Get-Random -Count не повторяет элементы, поэтому hex-строки генерим
-    # посимвольно: иначе длина упирается в размер алфавита (16) вместо 64/32.
-    $mcpTok     = if ($mcpTok)     { $mcpTok }     else { -join (1..64 | %{ '{0:x}' -f (Get-Random -Maximum 16) }) }
-    $searxngSec = if ($searxngSec) { $searxngSec } else { -join ((48..57)+(65..90)+(97..122) | Get-Random -Count 32 | %{[char]$_}) }
-    $serverKey  = if ($serverKey)  { $serverKey }  else { -join (1..32 | %{ '{0:x}' -f (Get-Random -Maximum 16) }) }
+    $dashPass   = if ($dashPass)   { $dashPass }   else { New-SecureAlnum 16 }
+    $dashSec    = if ($dashSec)    { $dashSec }    else { (New-SecureAlnum 44) + "==" }
+    $mcpTok     = if ($mcpTok)     { $mcpTok }     else { New-SecureHex 64 }
+    $searxngSec = if ($searxngSec) { $searxngSec } else { New-SecureAlnum 32 }
+    $serverKey  = if ($serverKey)  { $serverKey }  else { New-SecureHex 32 }
 
     # Write Hermes .env (only with the Hermes Gateway component)
     if ($script:SelectedComponents -contains "hermes") {
@@ -578,10 +618,20 @@ display:
         Write-INFO "Component 'hermes' not selected -- skipping Hermes .env / config.yaml"
     }
 
-    # Write stack .env for docker-compose (selection drives COMPOSE_PROFILES)
-    $apiEnvLine  = if ($script:SelectedComponents -contains "hermes")    { "API_SERVER_KEY=$serverKey`nHERMES_API_PORT=8642`nHERMES_DASHBOARD_PORT=9119" } else { "" }
-    $sxEnvLine   = if ($script:SelectedComponents -contains "searxng")    { "SEARXNG_HOST=127.0.0.1`nSEARXNG_PORT=8080" } else { "" }
-    $memEnvLine  = if ($script:SelectedComponents -contains "mnemosyne")  { "MNEMOSYNE_MCP_TOKEN=$mcpTok`nMNEMOSYNE_PORT=127.0.0.1:8081" } else { "" }
+    # Write stack .env for docker-compose (selection drives COMPOSE_PROFILES).
+    # Ports: reuse existing values from .env (README documents editing them
+    # there), fall back to defaults.
+    $apiPort = 8642; $dashPort = 9119; $sxPort = 8080; $memPort = "127.0.0.1:8081"
+    if (Test-Path "$InstallDir\.env") {
+        $e = Get-Content "$InstallDir\.env" -Raw
+        if ($e -match 'HERMES_API_PORT=(\d+)')        { $apiPort = $Matches[1] }
+        if ($e -match 'HERMES_DASHBOARD_PORT=(\d+)')  { $dashPort = $Matches[1] }
+        if ($e -match 'SEARXNG_PORT=(\d+)')           { $sxPort = $Matches[1] }
+        if ($e -match 'MNEMOSYNE_PORT=(\S+)')         { $memPort = $Matches[1] }
+    }
+    $apiEnvLine  = if ($script:SelectedComponents -contains "hermes")    { "API_SERVER_KEY=$serverKey`nHERMES_API_PORT=$apiPort`nHERMES_DASHBOARD_PORT=$dashPort" } else { "" }
+    $sxEnvLine   = if ($script:SelectedComponents -contains "searxng")    { "SEARXNG_HOST=127.0.0.1`nSEARXNG_PORT=$sxPort" } else { "" }
+    $memEnvLine  = if ($script:SelectedComponents -contains "mnemosyne")  { "MNEMOSYNE_MCP_TOKEN=$mcpTok`nMNEMOSYNE_PORT=$memPort" } else { "" }
     $profiles    = Get-ComposeProfiles
     $profilesLine = if ($profiles.Count -gt 0) { "COMPOSE_PROFILES=$($profiles -join ',')" } else { "" }
     @"
@@ -597,25 +647,37 @@ STACK_COMPONENTS=$($script:SelectedComponents -join ',')
     if ($script:SelectedComponents -contains "searxng") {
         @"
 SEARXNG_HOST=127.0.0.1
-SEARXNG_PORT=8080
+SEARXNG_PORT=$sxPort
 "@ | Write-File "$InstallDir\.env.searxng"
         Write-OK "SearXNG env"
 
-        # Fix searxng-settings.yml with real secret
-        (Get-Content "$InstallDir\searxng-settings.yml" -Raw) -replace '\$SEARXNG_SECRET_PLACEHOLDER', $searxngSec |
-            Write-File "$InstallDir\searxng-settings.yml"
+        # Generate searxng-settings.yml from the inline template. The file is
+        # gitignored -- the real secret must never be committed.
+        $sxTemplate = @(
+            'use_default_settings: true',
+            'server:',
+            '  secret_key: "__SEARXNG_SECRET__"',
+            '  image_proxy: true',
+            'search:',
+            '  formats:',
+            '    - html',
+            '    - json',
+            '    - csv',
+            '    - rss'
+        ) -join "`n"
+        $sxTemplate -replace '__SEARXNG_SECRET__', $searxngSec | Write-File "$InstallDir\searxng-settings.yml"
         Write-OK "SearXNG settings"
     }
 
     # Save credentials (sections for selected components only)
     $credDash = if ($script:SelectedComponents -contains "hermes") { @"
-Dashboard: http://localhost:9119
+Dashboard: http://localhost:$dashPort
   Username: admin
   Password: $dashPass
 "@ } else { "" }
     $credMem  = if ($script:SelectedComponents -contains "mnemosyne") { "Mnemosyne MCP Token: $mcpTok`n" } else { "" }
     $credSx   = if ($script:SelectedComponents -contains "searxng")   { "SearXNG Secret: $searxngSec`n" } else { "" }
-    $credApi  = if ($script:SelectedComponents -contains "hermes")   { "$Provider API Key: $($ApiKey.Substring(0,[Math]::Min(6,$ApiKey.Length)))...`n" } else { "" }
+    $credApi  = if ($script:SelectedComponents -contains "hermes")   { "$Provider API Key: $(if ($ApiKey) { $ApiKey.Substring(0,[Math]::Min(6,$ApiKey.Length)) } else { '?' })...`n" } else { "" }
     @"
 === Hermes Agent Stack -- Credentials ===
 Generated: $(Get-Date -Format "yyyy-MM-dd HH:mm")
@@ -727,6 +789,13 @@ test -n "$(ls -A /opt/data/plugins/mnemosyne)"
             if ($LASTEXITCODE -ne 0) { throw "config set failed" }
         } -Max 3 -Delay 5 -Desc "Set memory.provider=mnemosyne"
 
+        # The gateway rewrites config.yaml on config set / startup and resets
+        # memory_enabled to its default (false); re-apply it explicitly.
+        Invoke-Retry -Script {
+            docker exec hermes hermes config set memory.memory_enabled true 2>&1 | Out-Null
+            if ($LASTEXITCODE -ne 0) { throw "config set failed" }
+        } -Max 3 -Delay 5 -Desc "Set memory.memory_enabled=true"
+
         docker restart hermes 2>&1 | Out-Null
         Start-Sleep 8
         Write-OK "Plugin installed, Hermes restarted"
@@ -746,6 +815,11 @@ if (Is-Completed $step) { Write-OK "Step '$step' already done -- skipping" }
 else {
     Write-Step "STEP 5: Verifying stack health"
 
+    # Ports from .env (fall back to compose defaults)
+    $dashPort = [int](Get-StackPort 'HERMES_DASHBOARD_PORT=(\d+)' 9119)
+    $sxPort   = [int](Get-StackPort 'SEARXNG_PORT=(\d+)' 8080)
+    $memPort  = [int](Get-StackPort 'MNEMOSYNE_PORT=.*?:(\d+)' 8081)
+
     # Hermes API (retry — gateway may still be initializing)
     if ($script:SelectedComponents -contains "hermes") {
         try {
@@ -754,7 +828,7 @@ else {
             $r = $null
             for ($i=1; $i -le 5; $i++) {
                 try {
-                    $r = Invoke-RestMethod -Uri "http://localhost:9119/api/status" -Headers @{Authorization="Basic $b64"} -TimeoutSec 10
+                    $r = Invoke-RestMethod -Uri "http://localhost:$dashPort/api/status" -Headers @{Authorization="Basic $b64"} -TimeoutSec 10
                     break
                 } catch { if ($i -ge 5) { throw $_ }; Start-Sleep 3 }
             }
@@ -765,7 +839,7 @@ else {
     # SearXNG
     if ($script:SelectedComponents -contains "searxng") {
         try {
-            $r = Invoke-WebRequest -Uri 'http://localhost:8080/search?q=test&format=json' -TimeoutSec 10 -UseBasicParsing
+            $r = Invoke-WebRequest -Uri "http://localhost:$sxPort/search?q=test&format=json" -TimeoutSec 10 -UseBasicParsing
             Write-OK "SearXNG -- HTTP $($r.StatusCode)"
         } catch { Write-WARN "SearXNG: $_" }
     }
@@ -775,17 +849,23 @@ else {
     if ($script:SelectedComponents -contains "mnemosyne") {
         try {
             $tcp = New-Object System.Net.Sockets.TcpClient
-            $tcp.Connect("127.0.0.1", 8081)
+            $tcp.Connect("127.0.0.1", $memPort)
             $tcp.Close()
-            Write-OK "Mnemosyne -- port 8081 open"
+            Write-OK "Mnemosyne -- port $memPort open"
         } catch { Write-WARN "Mnemosyne: $_" }
     }
 
     # Memory provider
     if ($script:SelectedComponents -contains "mnemosyne" -and $script:SelectedComponents -contains "hermes") {
-        $memStatus = docker exec hermes hermes memory status 2>&1
-        if ($memStatus -match "mnemosyne.*active") { Write-OK "Memory provider: mnemosyne active" }
-        else { Write-WARN "Memory provider may not be active" }
+        # docker exec ... 2>&1 yields an ARRAY; join so -notmatch is a real
+        # boolean veto (same pattern as H7 in verify-specs.ps1).
+        $memStatus = (docker exec hermes hermes memory status 2>&1) -join "`n"
+        # honest check, same as H7: plugin list line "mnemosyne ... active" is
+        # always present once installed; assert the actual provider status
+        if (($memStatus -match 'Provider:\s*mnemosyne') -and ($memStatus -notmatch 'Status:\s*not available')) {
+            Write-OK "Memory provider: mnemosyne available"
+        }
+        else { Write-WARN "Memory provider may not be available" }
     }
 
     Set-State $step
@@ -820,12 +900,13 @@ else {
     # the dashboard credentials below.
     $connDir = "$env:APPDATA\hermes"
     New-Item -ItemType Directory -Force -Path $connDir | Out-Null
+    $dashPort = [int](Get-StackPort 'HERMES_DASHBOARD_PORT=(\d+)' 9119)
     @{
         mode = "remote"
-        remote = @{ url = "http://localhost:9119"; authMode = "oauth" }
+        remote = @{ url = "http://localhost:$dashPort"; authMode = "oauth" }
         profiles = @{}
     } | ConvertTo-Json -Depth 3 | Write-File "$connDir\connection.json"
-    Write-OK "Connection → http://localhost:9119 (oauth) "
+    Write-OK "Connection → http://localhost:$dashPort (oauth) "
 
     # Verify dashboard login works (validates the generated password against
     # the gateway's basic provider). Fail-fast so the user learns about a bad
@@ -835,7 +916,7 @@ else {
     $dashPassCheck = Get-DashPass
     try {
         $loginBody = @{ provider = "basic"; username = $dashUser; password = $dashPassCheck; next = "/" } | ConvertTo-Json
-        $loginResp = Invoke-RestMethod -Uri "http://localhost:9119/auth/password-login" -Method Post -ContentType "application/json" -Body $loginBody -TimeoutSec 8
+        $loginResp = Invoke-RestMethod -Uri "http://localhost:$dashPort/auth/password-login" -Method Post -ContentType "application/json" -Body $loginBody -TimeoutSec 8
         $loginOk = ($loginResp.ok -eq $true)
     } catch { $loginOk = $false }
     if ($loginOk) {
@@ -862,6 +943,7 @@ $dashPass  = Get-DashPass
 # Persist the component selection in the checkpoint state (used to detect changes)
 $s = Get-State
 $s | Add-Member -NotePropertyName components -NotePropertyValue ($script:SelectedComponents -join ",") -Force
+$s | Add-Member -NotePropertyName installedAt -NotePropertyValue (Get-Date -Format "yyyy-MM-dd HH:mm") -Force
 $s | ConvertTo-Json -Depth 3 | ForEach-Object { Write-File $StateFile $_ }
 
 # Ports for the copy-paste links — read from stack .env (set in step 2),
@@ -926,7 +1008,7 @@ Write-Host ""
 Write-Host "  -- Updates --" -ForegroundColor Yellow
 Write-Host "  Images:  cd $InstallDir && docker compose pull && docker compose up -d"
 if ($script:SelectedComponents -contains "hermes") {
-    Write-Host "  Hermes:  docker exec hermes hermes update"
+    Write-Host "  Hermes:  cd $InstallDir && docker compose pull && docker compose up -d"
 }
 Write-Host "  Script:  cd $InstallDir && git pull"
 Write-Host ""

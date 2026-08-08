@@ -5,7 +5,7 @@
 | **Компонент** | Hermes Gateway |
 | **Файлы** | `docker-compose.yml` (сервис `hermes`), `~/.hermes/.env`, `~/.hermes/config.yaml`, `%APPDATA%\hermes\connection.json` |
 | **Статус** | ✅ verified |
-| **Проверено** | 2026-08-02 |
+| **Проверено** | 2026-08-08 |
 
 ## 1. Назначение
 
@@ -52,19 +52,20 @@
 ### SCN-HERMES-02: Память через Mnemosyne MCP
 **Given** `memory.provider=mnemosyne`, `memory.memory_enabled=true` и плагин в `/opt/data/plugins/mnemosyne/`
 **When** агент читает/пишет память
-**Then** `hermes memory status` показывает mnemosyne active
+**Then** `hermes memory status` показывает провайдер mnemosyne и статус `available` (не `not available`)
 **And** плагин переживает пересоздание контейнера (лежит в bind-mount `~/.hermes/plugins/mnemosyne`)
+**And** `setup.ps1` (шаг 4) повторно применяет `memory.memory_enabled=true` после `config set` и переустанавливает `mnemosyne-hermes` после `docker compose pull`/recreate (venv эфемерен)
 
 ### SCN-HERMES-03: API и Dashboard за basic auth
 **Given** env-переменные `HERMES_DASHBOARD_BASIC_AUTH_*`
-**When** запрос `GET http://localhost:9119/api/status` с заголовком `Authorization: Basic base64(admin:<pass>)`
+**When** запрос `GET http://localhost:<HERMES_DASHBOARD_PORT>/api/status` с заголовком `Authorization: Basic base64(admin:<pass>)`
 **Then** ответ 200 с полем `version`
-**And** API-сервер слушает 8642 (env `API_SERVER_ENABLED=true`, `API_SERVER_HOST=0.0.0.0`, `API_SERVER_KEY=<32 hex>`)
+**And** API-сервер слушает `HERMES_API_PORT` (дефолт 8642; env `API_SERVER_ENABLED=true`, `API_SERVER_HOST=0.0.0.0`, `API_SERVER_KEY=<32 hex>`)
 
 ### SCN-HERMES-04: Desktop подключается как remote gateway
 **Given** `%APPDATA%\hermes\connection.json` записан установщиком
-**Then** `mode=remote`, `remote.url=http://localhost:9119`, `remote.authMode=oauth` (см. комментарий в шаге 6 `setup.ps1`: не-oauth нормализуется Desktop в token-auth и не проходит WebSocket-аутентификацию)
-**And** Desktop подключается к контейнеру через host-порт 9119
+**Then** `mode=remote`, `remote.url=http://localhost:<HERMES_DASHBOARD_PORT>`, `remote.authMode=oauth` (см. комментарий в шаге 6 `setup.ps1`: не-oauth нормализуется Desktop в token-auth и не проходит WebSocket-аутентификацию)
+**And** Desktop подключается к контейнеру через host-порт `HERMES_DASHBOARD_PORT` (дефолт 9119)
 
 ## 4. Приёмочные критерии
 
@@ -75,9 +76,9 @@
 | H3 | config.yaml: `search_backend: searxng` | чтение файла |
 | H4 | config.yaml: `memory_enabled: true` и `provider: mnemosyne` | чтение файла |
 | H5 | `~/.hermes/plugins/mnemosyne/` существует (bind-mount) | `Test-Path` |
-| H6 | `GET /api/status` на 9119 с basic auth → 200 + version | `Invoke-RestMethod` |
-| H7 | `hermes memory status` содержит `mnemosyne...active` | `docker exec hermes hermes memory status` |
-| H8 | `connection.json`: mode=remote, url=localhost:9119, authMode=oauth | чтение JSON |
+| H6 | `GET /api/status` на `HERMES_DASHBOARD_PORT` с basic auth → 200 + version | `Invoke-RestMethod` |
+| H7 | `hermes memory status`: провайдер mnemosyne и статус НЕ `not available` (проверка по строке `Status`, а не по списку плагинов) | `docker exec hermes hermes memory status` |
+| H8 | `connection.json`: mode=remote, url=localhost:`HERMES_DASHBOARD_PORT`, authMode=oauth | чтение JSON |
 
 ## 5. Верификация
 
@@ -85,5 +86,5 @@
 powershell -ExecutionPolicy Bypass -File specs/verify-specs.ps1
 ```
 
-Все AC (H1–H8) исполняются автоматически. Пароль для H6 скрипт читает из
+Все AC (H1–H8) исполняются автоматически; H1/H3 пропускаются без searxng, H4/H5/H7 — без mnemosyne. Пароль для H6 скрипт читает из
 `credentials.txt` (fallback: `~/.hermes/.env`) и не печатает.

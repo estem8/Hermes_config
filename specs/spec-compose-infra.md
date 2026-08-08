@@ -5,7 +5,7 @@
 | **Компонент** | Инфраструктура Docker Compose |
 | **Файл** | `docker-compose.yml` |
 | **Статус** | ✅ verified |
-| **Проверено** | 2026-08-02 |
+| **Проверено** | 2026-08-08 |
 
 ## 1. Назначение
 
@@ -34,29 +34,29 @@
 
 ## 3. Поведенческие сценарии
 
-### SCN-COMPOSE-01: Четыре сервиса поднимаются в общей сети
-**Given** Docker Desktop запущен и `./.env` содержит `MNEMOSYNE_MCP_TOKEN`
+### SCN-COMPOSE-01: Выбранные сервисы поднимаются в общей сети
+**Given** Docker Desktop запущен и `./.env` содержит `MNEMOSYNE_MCP_TOKEN` (при mnemosyne)
 **When** `docker compose up -d` завершается успешно
-**Then** существуют и работают контейнеры `hermes`, `searxng-core`, `searxng-valkey`, `mnemosyne`
-**And** все четыре прикреплены к сети `hermes-net`
+**Then** существуют и работают `hermes` + контейнеры выбранных компонентов (`searxng-core`/`searxng-valkey` при searxng, `mnemosyne` при mnemosyne)
+**And** все запущенные контейнеры прикреплены к сети `hermes-net`
 
 ### SCN-COMPOSE-02: Hermes — gateway, а не интерактивный CLI
 **Given** образ `nousresearch/hermes-agent:latest`
 **When** контейнер стартует
 **Then** команда контейнера — `["gateway", "run"]`
 **And** конфиг смонтирован bind-mount'ом `~/.hermes` → `/opt/data` (без volume'а — иначе пустой конфиг)
-**And** на host опубликованы `8642` (API) и `9119` (Dashboard) на `0.0.0.0`
+**And** на host опубликованы `HERMES_API_PORT` (дефолт 8642) и `HERMES_DASHBOARD_PORT` (дефолт 9119) на `0.0.0.0`
 **And** контейнер получает `API_SERVER_KEY` из `./.env` (32 hex, генерируется `setup.ps1`; известного дефолтного ключа нет)
 
 ### SCN-COMPOSE-03: SearXNG доступен только с loopback
 **When** контейнер `searxng-core` запущен
-**Then** порт опубликован как `127.0.0.1:8080` (не на LAN)
+**Then** порт опубликован как `127.0.0.1:<SEARXNG_PORT>` (дефолт 8080; не на LAN)
 **And** `searxng-settings.yml` смонтирован в `/etc/searxng/settings.yml` read-only
 **And** кэш лежит в volume `searxng-cache:/var/cache/searxng/`
 
 ### SCN-COMPOSE-04: Mnemosyne — loopback + healthcheck, терпящий SSE
 **When** контейнер `mnemosyne` запущен
-**Then** порт опубликован как `127.0.0.1:8081`
+**Then** порт опубликован как `127.0.0.1:<MNEMOSYNE_PORT>` (дефолт 8081)
 **And** healthcheck опрашивает `/sse` и считается успешным даже при exit code 28 (timeout — SSE-стрим не закрывается)
 **And** данные лежат в volume `mnemosyne-data:/data`
 
@@ -76,11 +76,11 @@
 
 | ID | Критерий | Проверка |
 |----|----------|----------|
-| C1 | Все 4 контейнера в списке `docker ps` (референсная установка со всеми компонентами; при выборочной — только выбранные) | `docker ps --format '{{.Names}}'` |
-| C2 | Все 4 в сети `hermes-net` | `docker inspect <name> --format '{{range $k,$v := .NetworkSettings.Networks}}{{$k}} {{end}}'` |
-| C3 | hermes публикует 8642 и 9119 на `0.0.0.0` | `docker port hermes` |
-| C4 | searxng-core публикует только `127.0.0.1:8080` | `docker port searxng-core` |
-| C5 | mnemosyne публикует только `127.0.0.1:8081` | `docker port mnemosyne` |
+| C1 | В `docker ps` есть `hermes` + контейнеры выбранных компонентов (из `STACK_COMPONENTS` в `./.env`; по умолчанию — все) | `docker ps --format '{{.Names}}'` |
+| C2 | Все ожидаемые контейнеры в сети `hermes-net` | `docker inspect <name> --format '{{range $k,$v := .NetworkSettings.Networks}}{{$k}} {{end}}'` |
+| C3 | hermes публикует `HERMES_API_PORT` и `HERMES_DASHBOARD_PORT` на `0.0.0.0` | `docker port hermes` |
+| C4 | searxng-core публикует только `127.0.0.1:<SEARXNG_PORT>` (skip без searxng) | `docker port searxng-core` |
+| C5 | mnemosyne публикует только `127.0.0.1:<MNEMOSYNE_PORT>` (skip без mnemosyne) | `docker port mnemosyne` |
 | C6 | Cmd hermes содержит `gateway run` | `docker inspect hermes --format '{{json .Config.Cmd}}'` |
 | C7 | Bind-mount `~/.hermes` → `/opt/data` (rw) | `docker inspect hermes --format '{{range .Mounts}}{{.Source}}=>{{.Destination}}(rw={{.RW}}) {{end}}'` |
 | C9 | settings.yml смонтирован read-only | `docker inspect searxng-core --format '{{range .Mounts}}...{{end}}'` |
@@ -92,4 +92,4 @@
 powershell -ExecutionPolicy Bypass -File specs/verify-specs.ps1
 ```
 
-Все AC этого спека исполняются верификатором автоматически (ID C1–C7, C9, C10).
+Все AC этого спека исполняются верификатором автоматически (ID C1–C7, C9, C10); проверки невыбранных компонентов пропускаются с PASS.

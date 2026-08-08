@@ -25,8 +25,8 @@ Hermes и интеграция с Desktop.
 
 | Spec | Компонент | Артефакты | AC |
 |------|-----------|-----------|----|
-| [spec-compose-infra.md](spec-compose-infra.md) | Инфраструктура compose | `docker-compose.yml` | C1–C7, C9 |
-| [spec-setup-script.md](spec-setup-script.md) | Установщик | `setup.ps1`, генерируемые файлы | P1–P7 |
+| [spec-compose-infra.md](spec-compose-infra.md) | Инфраструктура compose | `docker-compose.yml` | C1–C7, C9, C10 |
+| [spec-setup-script.md](spec-setup-script.md) | Установщик | `setup.ps1`, генерируемые файлы | P1–P8 |
 | [spec-hermes-service.md](spec-hermes-service.md) | Hermes Gateway | `~/.hermes/.env`, `~/.hermes/config.yaml`, `connection.json` | H1–H8 |
 | [spec-searxng-service.md](spec-searxng-service.md) | Поиск | `searxng-settings.yml`, `.env.searxng`, контейнеры searxng | S1–S4 |
 | [spec-mnemosyne-service.md](spec-mnemosyne-service.md) | Память | `Dockerfile.mnemosyne`, контейнер, плагин | M1–M5 |
@@ -35,11 +35,11 @@ Hermes и интеграция с Desktop.
 
 | Spec | Статус | Прогон | Провалы |
 |------|--------|--------|---------|
-| spec-compose-infra | ✅ verified | 2026-08-02 | 0/8 |
-| spec-setup-script | ✅ verified (P6/P7 — manual) | 2026-08-02 | 0/5 auto |
-| spec-hermes-service | ✅ verified | 2026-08-02 | 0/8 |
-| spec-searxng-service | ✅ verified | 2026-08-02 | 0/4 |
-| spec-mnemosyne-service | ✅ verified | 2026-08-02 | 0/5 |
+| spec-compose-infra | ✅ verified (selection-aware) | 2026-08-08 | 0/9 (C4/C9 — skip без searxng) |
+| spec-setup-script | ✅ verified (P6–P8 — manual) | 2026-08-08 | 0/5 auto |
+| spec-hermes-service | ✅ verified | 2026-08-08 | 0/8 (H1/H3 — skip без searxng) |
+| spec-searxng-service | ✅ verified | 2026-08-08 | 0/4 (skip без searxng) |
+| spec-mnemosyne-service | ✅ verified | 2026-08-08 | 0/5 |
 
 ## Запуск верификации
 

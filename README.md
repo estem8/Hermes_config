@@ -31,7 +31,7 @@ powershell -ExecutionPolicy Bypass -File setup.ps1 -Install -Components "mnemosy
 ```
 
 > **Interactive mode:** run `setup.ps1` without arguments to open a menu. A live status panel on top shows Docker / API / SearXNG / Mnemosyne as `[OK]`/`[FAIL]` (only for selected components), then choose:
-> - **Setup:** **1. Install** — pick components (checkbox screen) then run the 6-step setup (status bar `[####------] 4/6`) · **2. Update** — `docker compose pull` + `hermes update` + restart
+> - **Setup:** **1. Install** — pick components (checkbox screen) then run the 6-step setup (status bar `[####------] 4/6`) · **2. Update** — `docker compose pull` + `up -d` (in-container `hermes update` is unsupported — the container has no git worktree)
 > - **Managing the Stack:** **3. Status** (`docker compose ps`) · **4. Logs** (`logs -f`) · **5. Start** (`up -d`) · **6. Restart** · **7. Stop** (`down`) · **8. Stats** (`docker stats`)
 > - **0. Exit**
 >
@@ -90,6 +90,8 @@ The selection is persisted in `./.env`:
 
 > SearXNG/Mnemosyne start only when their profile is enabled (`COMPOSE_PROFILES`); `hermes` has no profile and is always part of `docker compose up -d`. Requires Docker Compose v2.20+ (ships with current Docker Desktop).
 >
+> Ports are preserved across re-runs: changing `HERMES_API_PORT` / `HERMES_DASHBOARD_PORT` / `SEARXNG_PORT` / `MNEMOSYNE_PORT` in `./.env` survives the next setup run (step 2 reuses them). `-ResetState` only clears checkpoints + `credentials.txt` and does not touch `./.env` -- ports and secrets are still reused.
+>
 > **Changing the selection after an install re-applies automatically:** on the next run the setup detects the mismatch (from `STACK_COMPONENTS` / state), resets the component-dependent steps (2–6) and re-runs them with the new selection — existing secrets are **reused**, so dashboard password / MCP token / API keys are not rotated. Example: uncheck SearXNG in the menu → Enter → SearXNG containers are removed and `web.search_backend` is dropped from `config.yaml`.
 
 ## Features
@@ -110,7 +112,7 @@ hermes-stack/
 ├── setup.ps1               # Main installer (status bar + links)
 ├── docker-compose.yml      # hermes + searxng + valkey + mnemosyne
 ├── Dockerfile.mnemosyne     # Mnemosyne image
-├── searxng-settings.yml    # SearXNG config (secret placeholder → real value at setup)
+├── searxng-settings.yml    # SearXNG config — GENERATED at setup from template in setup.ps1 (gitignored, secret never in git)
 ├── specs/                   # SDD-спецификации + verify-specs.ps1
 ├── .env                     # Stack env vars (MCP_TOKEN, API_SERVER_KEY, ports) — NOT in git
 ├── .env.searxng            # SearXNG env — NOT in git
@@ -154,14 +156,14 @@ docker system prune                 # clean up unused Docker data (read the prom
 ## Connecting Hermes Desktop
 
 1. Launch **Hermes Desktop** from the Start Menu
-2. Open **Settings → Gateway → Remote gateway**
-3. Enter the values printed by the script:
+2. Open **Settings → Gateway → Remote gateway** (or the connection `connection.json` already written by the script)
+3. **Sign in** (once) with the values printed by the script:
    - **URL:** `http://localhost:9119`
    - **User:** `admin`
    - **Pass:** (from `credentials.txt`)
-4. **Save and reconnect**
+4. Desktop stores the session — subsequent connects reuse it
 
-The desktop app talks to the gateway in Docker through `localhost:9119` — no extra configuration needed.
+The desktop app talks to the gateway in Docker through `localhost:9119` (the port comes from `HERMES_DASHBOARD_PORT` in `./.env`) — no extra configuration needed.
 
 ## After Setup
 
@@ -180,27 +182,28 @@ docker compose pull
 docker compose build mnemosyne
 docker compose up -d
 
-# 2. Update Hermes inside the container (self-updater)
-docker exec hermes hermes update
+# 2. Update Hermes via image pull (in-container `hermes update` is unsupported)
+docker compose pull && docker compose up -d
+# restart applies the fresh image
 docker restart hermes
 
 # 3. Update this script/stack repo
 git pull
 
-# 4. Full rebuild from scratch (new configs, new secrets)
+# 4. Full rebuild from scratch (new configs; secrets are REUSED, not rotated)
 powershell -ExecutionPolicy Bypass -File setup.ps1 -ResetState -ApiKey "sk-..."
 
 # Rebuild with a component selection (Hermes always included)
 powershell -ExecutionPolicy Bypass -File setup.ps1 -Install -ResetState -Components "mnemosyne" -ApiKey "sk-..."
 ```
 
-> `setup.ps1 -ResetState` regenerates dashboard password and MCP token — update `credentials.txt` afterwards.
+> `setup.ps1 -ResetState` resets checkpoints and rewrites `credentials.txt`. Secrets are NOT regenerated: step 2 reuses the existing values from `~/.hermes/.env` / `./.env` (no rotation).
 
 ## Troubleshooting
 
 | Symptom | Fix |
 |---------|-----|
 | Script stuck at step 3 ("compose up failed") | Ensure Docker Desktop is running, then re-run — checkpoints resume |
-| `SearXNG -- HTTP 000` in verify step | Check `docker compose ps` (all 4 up) and `docker network inspect hermes-net`; re-run `docker compose up -d` |
-| Wrong dashboard password | See `credentials.txt`; reset with `-ResetState` |
+| `SearXNG -- HTTP 000` in verify step | Check `docker compose ps` (all expected containers up) and `docker network inspect hermes-net`; re-run `docker compose up -d` |
+| Wrong dashboard password | The password is in `~/.hermes/.env` (`HERMES_DASHBOARD_BASIC_AUTH_PASSWORD`) and is REUSED on re-runs; to rotate it, delete that key from `~/.hermes/.env` and re-run step 2 (or use `-ResetState`) |
 | Port 9119/8642 busy | Change ports in `.env` (`HERMES_DASHBOARD_PORT`, `HERMES_API_PORT`) then `docker compose up -d` |

@@ -5,6 +5,13 @@ credentials.txt
 .env
 .env.searxng
 
+# SearXNG settings: real secret_key is generated into this file at setup time
+# from the inline template in setup.ps1; never commit this file.
+searxng-settings.yml
+
+# Hermes Desktop installer downloaded to the stack dir during setup
+hermes-setup.exe
+
 # Checkpoint state (auto-generated)
 .hermes-stack-state.json
 

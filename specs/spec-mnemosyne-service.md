@@ -5,7 +5,7 @@
 | **Компонент** | Mnemosyne MCP-сервер + плагин Hermes |
 | **Файлы** | `Dockerfile.mnemosyne`, `docker-compose.yml` (сервис `mnemosyne`), шаг 4 `setup.ps1` |
 | **Статус** | ✅ verified |
-| **Проверено** | 2026-08-02 |
+| **Проверено** | 2026-08-08 |
 
 ## 1. Назначение
 
@@ -22,7 +22,7 @@ MCP-сервер персистентной памяти: контейнер н�
 |------|------------|
 | base | `python:3.12-slim` |
 | pip | `mnemosyne-memory[mcp]` (без кэша) |
-| apt | `sqlite3`, `curl` (диагностика) |
+| apt | `sqlite3`, `curl` (диагностика; `--no-install-recommends`) |
 | dirs | `mkdir -p /data` |
 | ENV | `MNEMOSYNE_DATA_DIR=/data`, `MNEMOSYNE_MCP_TOKEN=` (пусто — заполняет compose из `./.env`) |
 | CMD | `python -m mnemosyne.mcp_server --transport sse --host 0.0.0.0 --port 8080` |
@@ -35,7 +35,7 @@ MCP-сервер персистентной памяти: контейнер н�
 **Given** `MNEMOSYNE_MCP_TOKEN` задан в `./.env` и проброшен в контейнер
 **When** сервер стартует на `0.0.0.0:8080`
 **Then** без токена он отказывается биндить не-loopback адрес («Refusing to bind MCP SSE on non-loopback host ... without authentication»)
-**And** на host сервис опубликован как `127.0.0.1:8081`
+**And** на host сервис опубликован как `127.0.0.1:<MNEMOSYNE_PORT>` (дефолт 8081)
 
 ### SCN-MNEMO-02: Данные персистентны
 **When** контейнер пересоздаётся (`docker compose up -d --force-recreate`)
@@ -48,14 +48,16 @@ MCP-сервер персистентной памяти: контейнер н�
 ### SCN-MNEMO-04: Плагин в Hermes
 **Given** шаг 4 установщика выполнен
 **Then** `mnemosyne-hermes` установлен pip'ом в venv Hermes и скопирован в `/opt/data/plugins/mnemosyne/`
-**And** `memory.provider=mnemosyne` в config.yaml, `hermes memory status` → active
+**And** `memory.provider=mnemosyne` и `memory.memory_enabled=true` в config.yaml (шаг 4 повторно применяет флаг — gateway сбрасывает его в false при перезаписи конфига)
+**And** `hermes memory status`: статус `available` (не `not available`)
+**And** venv эфемерен: после `docker compose pull`/recreate `setup.ps1` (Update) переустанавливает `mnemosyne-hermes` — плагин-директория в bind-mount `/opt/data/plugins/` переживает, pip-пакеты — нет
 
 ## 4. Приёмочные критерии
 
 | ID | Критерий | Проверка |
 |----|----------|----------|
 | M1 | Контейнер `mnemosyne` healthy | `docker inspect mnemosyne --format '{{.State.Health.Status}}'` |
-| M2 | TCP-порт 8081 на localhost открыт | TCP-проба |
+| M2 | TCP-порт из `MNEMOSYNE_PORT` (дефолт 8081) на localhost открыт | TCP-проба |
 | M3 | В env контейнера есть непустой `MNEMOSYNE_MCP_TOKEN` | `docker inspect mnemosyne --format '{{range .Config.Env}}{{.}}|{{end}}'` |
 | M4 | В env контейнера есть `MNEMOSYNE_DATA_DIR=/data` | то же |
 | M5 | `/opt/data/plugins/mnemosyne/` в контейнере непуст | `docker exec hermes ls /opt/data/plugins/mnemosyne/` |

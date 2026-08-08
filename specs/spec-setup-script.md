@@ -5,7 +5,7 @@
 | **Компонент** | Установщик стека |
 | **Файл** | `setup.ps1` |
 | **Статус** | ✅ verified |
-| **Проверено** | 2026-08-02 |
+| **Проверено** | 2026-08-08 |
 
 ## 1. Назначение
 
@@ -42,7 +42,7 @@ Docker, генерация секретов, запись конфигов Herme
 
 ### SCN-SETUP-01: Без аргументов — интерактивное меню
 **Given** скрипт запущен без параметров
-**Then** поверх меню рисуется статус-панель: Docker (`docker info`), API (TCP 9119), Search (TCP 8080), Memory (TCP 8081) как `[OK]`/`[FAIL]` — ячейки только для выбранных компонентов
+**Then** поверх меню рисуется статус-панель: Docker (`docker info`), Dash (TCP `HERMES_DASHBOARD_PORT`, дефолт 9119), Search (TCP `SEARXNG_PORT`, дефолт 8080), Memory (TCP порт из `MNEMOSYNE_PORT`, дефолт 8081) как `[OK]`/`[FAIL]` — ячейки только для выбранных компонентов
 **And** пункты меню: Setup — 1 Install, 2 Update; Managing the Stack — 3 Status (`docker compose ps`), 4 Logs (`logs -f`), 5 Start (`up -d`), 6 Restart, 7 Stop (`down`), 8 Stats (`docker stats`); 0 Exit
 **And** при выборе «1 Install» сначала показывается экран выбора компонентов (`Select-Components`): чекбоксы `[x]`/`[ ]` для searxng/mnemosyne, `hermes` показан как `[x] (always installed)` и не переключается; клавиши 1–3 переключают, `a`/`n` — все/ни один, Enter — продолжить; опциональный набор (searxng/mnemosyne) может быть пустым — hermes включается автоматически
 
@@ -50,11 +50,11 @@ Docker, генерация секретов, запись конфигов Herme
 **When** скрипт запущен с `-Install`
 **Then** выполняются шаги (со статус-баром `[####------] N/6 <label>`); шаги, относящиеся к невыбранным компонентам, пропускаются с `Write-INFO`:
 1. `prerequisites` — проверка админ-прав (warn), наличие docker (иначе скачать установщик Docker Desktop и exit 0), ожидание демона (retry 6×10s), запрос API-ключа если пуст (warn если < 10 символов)
-2. `directories` — mkdir `InstallDir` и `~/.hermes`; генерация секретов (в т.ч. `API_SERVER_KEY`, 32 hex); запись `~/.hermes/.env`, `~/.hermes/config.yaml`, `./.env`, `./.env.searxng`, подстановка секрета в `searxng-settings.yml`, запись `credentials.txt`
-3. `containers` — `docker compose down --remove-orphans`, удаление только legacy-контейнеров без label compose-проекта (одноимённые контейнеры чужих проектов не трогаются), build mnemosyne (retry 2), `docker compose up -d` (retry 3×8s), ожидание 10s, проверка что все 4 в `docker ps`
-4. `plugin` — `docker exec hermes uv pip install mnemosyne-hermes` (retry 3×8s), копирование пакета в `/opt/data/plugins/mnemosyne/` (путь site-packages ищется динамически, retry 3, проверка exit code), `hermes config set memory.provider mnemosyne` (retry 3, проверка exit code), `docker restart hermes`, ожидание 8s
-5. `verify` — Hermes API `GET /api/status` с basic auth (retry 5×3s, печать версии), SearXNG `GET /search?q=test&format=json` (HTTP 200), Mnemosyne TCP-проба 8081 (SSE вешает Invoke-WebRequest), `hermes memory status` ≈ `mnemosyne.*active`
-6. `desktop` — установка Hermes Desktop если `%LOCALAPPDATA%\hermes\hermes-agent\apps\desktop` отсутствует (скачать установщик, `--silent`), запись `%APPDATA%\hermes\connection.json` (mode=remote, url=`http://localhost:9119`, authMode=oauth)
+2. `directories` — mkdir `InstallDir` и `~/.hermes`; генерация секретов (в т.ч. `API_SERVER_KEY`, 32 hex; CSPRNG `RNGCryptoServiceProvider`); запись `~/.hermes/.env`, `~/.hermes/config.yaml`, `./.env` (порты переиспользуются из существующего `.env`), `./.env.searxng`, генерация `searxng-settings.yml` из шаблона в `setup.ps1` (файл gitignored), запись `credentials.txt`
+3. `containers` — `docker compose down --remove-orphans`, удаление только legacy-контейнеров без label compose-проекта (одноимённые контейнеры чужих проектов не трогаются), build mnemosyne (retry 2), `docker compose up -d` (retry 3×8s), ожидание 10s, проверка что все ожидаемые контейнеры в `docker ps` (набор — из выборки компонентов)
+4. `plugin` — `docker exec hermes uv pip install mnemosyne-hermes` (retry 3×8s), копирование пакета в `/opt/data/plugins/mnemosyne/` (путь site-packages ищется динамически, retry 3, проверка exit code), `hermes config set memory.provider mnemosyne` (retry 3, проверка exit code), повторно `hermes config set memory.memory_enabled true` (gateway сбрасывает флаг в false при перезаписи конфига), `docker restart hermes`, ожидание 8s
+5. `verify` — порты читаются из `./.env` (fallback: 9119/8080/8081); Hermes API `GET /api/status` на dashboard-порт с basic auth (retry 5×3s, печать версии), SearXNG `GET /search?q=test&format=json` (HTTP 200), Mnemosyne TCP-проба порта из `MNEMOSYNE_PORT` (SSE вешает Invoke-WebRequest), `hermes memory status`: провайдер mnemosyne и статус НЕ `not available` (честная проверка, не по строке списка плагинов)
+6. `desktop` — установка Hermes Desktop если `%LOCALAPPDATA%\hermes\hermes-agent\apps\desktop` отсутствует (скачать установщик, `--silent`), запись `%APPDATA%\hermes\connection.json` (mode=remote, url=`http://localhost:<HERMES_DASHBOARD_PORT>`, authMode=oauth)
 
 ### SCN-SETUP-03: `-DryRun` ничего не меняет
 **Given** скрипт запущен с `-DryRun`
@@ -80,14 +80,16 @@ Docker, генерация секретов, запись конфигов Herme
 ### SCN-SETUP-07: Артефакты шага 2
 **Then** `~/.hermes/.env`: `<ENVKEY>=<key>`, `SEARXNG_URL=http://searxng-core:8080`, `HERMES_DASHBOARD_BASIC_AUTH_USERNAME=admin`, пароль и секрет
 **And** `~/.hermes/config.yaml`: `model.default=<provider>/<model>`, `model.provider`, `web.search_backend=searxng`, `memory.memory_enabled=true`, `memory.provider=mnemosyne`, `terminal.backend=local`, `approvals.mode=smart`, `display.language=ru`, `display.show_cost=true`
-**And** `./.env`: `MNEMOSYNE_MCP_TOKEN`, `API_SERVER_KEY` (32 hex), порты `HERMES_API_PORT=8642`, `HERMES_DASHBOARD_PORT=9119`, `SEARXNG_HOST/PORT`, `MNEMOSYNE_PORT=127.0.0.1:8081`
-**And** `./.env.searxng`: `SEARXNG_HOST=127.0.0.1`, `SEARXNG_PORT=8080`
-**And** в `searxng-settings.yml` плейсхолдер `$SEARXNG_SECRET_PLACEHOLDER` заменён на реальный секрет
-**And** `credentials.txt` содержит дату, URL дашборда, `admin`/пароль, MCP-токен, API Server Key, searxng-секрет, маску API-ключа
+**And** `./.env`: `MNEMOSYNE_MCP_TOKEN`, `API_SERVER_KEY` (32 hex), порты `HERMES_API_PORT` (дефолт 8642), `HERMES_DASHBOARD_PORT` (дефолт 9119), `SEARXNG_HOST/PORT` (дефолт 8080), `MNEMOSYNE_PORT` (дефолт 127.0.0.1:8081) — существующие значения из `.env` переиспользуются, не перезаписываются
+**And** `./.env.searxng`: `SEARXNG_HOST=127.0.0.1`, `SEARXNG_PORT` (переиспользуется из `.env`, дефолт 8080)
+**And** `searxng-settings.yml` генерируется из шаблона в `setup.ps1` с реальным секретом (файл gitignored, в git не хранится)
+**And** `credentials.txt` содержит дату, URL дашборда (`HERMES_DASHBOARD_PORT`), `admin`/пароль, MCP-токен (при mnemosyne), searxng-секрет (при searxng), маску API-ключа провайдера (первые 6 символов)
 
 ### SCN-SETUP-08: Меню → Update
 **When** выбрано «2. Update» (или `Invoke-Update`)
-**Then** `docker compose pull` (retry 2), `docker compose build mnemosyne` (retry 2), `docker compose up -d` (retry 3×8s), `docker exec hermes hermes update`, `docker restart hermes`
+**Then** `docker compose pull` (retry 2), `docker compose build mnemosyne` (retry 2, только при mnemosyne), `docker compose up -d` (retry 3×8s), при mnemosyne — повторная установка `mnemosyne-hermes` в venv (recreate контейнера сбрасывает pip-пакеты, плагин-директория в bind-mount переживает), `docker restart hermes` (при ненулевом exit code — `WARN`)
+**And** `docker exec hermes hermes update` НЕ вызывается — в контейнере нет git-worktree, команда намеренно завершается exit 1; обновление Hermes = `docker compose pull` + `up -d`
+**And** финальное сообщение: `OK Update complete` — только если не было `WARN`, иначе `WARN Update finished with warnings`
 
 ### SCN-SETUP-10: Меню → Managing the Stack
 **When** выбран пункт «Status / Logs / Start / Restart / Stop / Stats»
@@ -105,7 +107,7 @@ Docker, генерация секретов, запись конфигов Herme
 **And** шаг 4 (плагин) — только при mnemosyne (hermes есть всегда); шаг 5 проверяет только выбранные компоненты; шаг 6 (Desktop) — всегда
 **And** при расхождении выбора с фактически установленным (источник истины — `STACK_COMPONENTS` в `./.env`, написанный применяющим шагом 2; для legacy-установок без `STACK_COMPONENTS` считается `hermes,searxng,mnemosyne`) печатается `WARN` и сбрасываются чекпоинты шагов 2–6 (`directories`, `containers`, `plugin`, `verify`, `desktop`) — шаги перевыполняются с новой выборкой
 **And** `state.components` НЕ используется для сравнения (может быть устаревшим: его пишет сводка даже после run'а, где все шаги пропущены)
-**And** шаг 2 переиспользует существующие секреты (`~/.hermes/.env`, `./.env`, `searxng-settings.yml`), генерирует только недостающие — пароли/токены при смене выборки не ротируются; `DEEPSEEK_API_KEY` при отсутствии `-ApiKey` восстанавливается из `~/.hermes/.env`
+**And** шаг 2 переиспользует существующие секреты (`~/.hermes/.env`, `./.env`, `searxng-settings.yml`) и порты (`HERMES_API_PORT`, `HERMES_DASHBOARD_PORT`, `SEARXNG_PORT`, `MNEMOSYNE_PORT`), генерирует только недостающие — пароли/токены/порты при смене выборки не ротируются; `DEEPSEEK_API_KEY` при отсутствии `-ApiKey` восстанавливается из `~/.hermes/.env`
 **And** в конце выбранный набор сохраняется в state как `components`
 
 ### SCN-SETUP-09: Итоговая сводка
@@ -119,7 +121,7 @@ Docker, генерация секретов, запись конфигов Herme
 |----|----------|----------|-----|
 | P1 | `.hermes-stack-state.json` существует и парсится, `completed` — массив | `Get-Content | ConvertFrom-Json` | auto |
 | P2 | `credentials.txt` существует | `Test-Path` | auto |
-| P3 | `./.env` содержит `MNEMOSYNE_MCP_TOKEN`, `API_SERVER_KEY` (32 hex) и порты 8642/9119 | чтение файла | auto |
+| P3 | `./.env` содержит `API_SERVER_KEY` (32 hex) и порты (`HERMES_API_PORT`/`HERMES_DASHBOARD_PORT` — значения из `.env`); `MNEMOSYNE_MCP_TOKEN` — только если mnemosyne выбран | чтение файла | auto |
 | P4 | `./.env.searxng` содержит host/port loopback | чтение файла | auto |
 | P5 | `setup.ps1` парсится без синтаксических ошибок | `Parser::ParseFile` | auto |
 | P6 | `-DryRun` не создаёт/не меняет файлы и не дёргает docker | ручной прогон | manual |
@@ -132,4 +134,4 @@ Docker, генерация секретов, запись конфигов Herme
 powershell -ExecutionPolicy Bypass -File specs/verify-specs.ps1
 ```
 
-Автоматически: P1–P5. Вручную: P6, P7 (интерактивные сценарии).
+Автоматически: P1–P5. Вручную: P6, P7, P8 (интерактивные сценарии).
